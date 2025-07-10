@@ -7,6 +7,9 @@ const cors = require('cors');
 const app = express();
 const port = process.env.PORT || 3001;
 
+// --- Access the new Gemini API key from environment variables ---
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+
 app.use(cors());
 app.use(express.json());
 
@@ -42,13 +45,19 @@ app.get('/api/instruments', async (req, res) => {
  * @description Calls the Gemini API to generate a summary of the latest Indian market news.
  */
 app.get('/api/market-news', async (req, res) => {
+    // Check if the API key is configured on the server
+    if (!GEMINI_API_KEY) {
+        return res.status(500).json({ message: "AI API key is not configured on the server." });
+    }
+
     try {
         const prompt = "Provide a brief, one-paragraph summary of today's key highlights and trends in the Indian stock market (NSE & BSE). Mention the performance of key indices like NIFTY 50 and SENSEX, and any notable sector movements.";
         
         const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
         const payload = { contents: chatHistory };
-        const apiKey = ""; // API key is handled by the environment
-        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+        
+        // Use the GEMINI_API_KEY from the environment
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
         
         const response = await axios.post(apiUrl, payload, {
             headers: { 'Content-Type': 'application/json' }
