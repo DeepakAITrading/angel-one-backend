@@ -3,77 +3,36 @@
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
-const pyotp = require('pyotp'); // Library to generate Time-based One-Time Passwords
 
 const app = express();
 const port = process.env.PORT || 3001;
-
-// --- Securely access your credentials from environment variables ---
-const ANGEL_API_KEY = process.env.ANGEL_API_KEY;
-const ANGEL_CLIENT_ID = process.env.ANGEL_CLIENT_ID;
-const ANGEL_PASSWORD = process.env.ANGEL_PASSWORD;
-const ANGEL_TOTP_SECRET = process.env.ANGEL_TOTP_SECRET;
-
-// --- In-memory storage for session tokens ---
-let session = {
-    jwtToken: null,
-    feedToken: null,
-    profile: null
-};
 
 app.use(cors());
 app.use(express.json());
 
 // --- API Endpoints ---
 
+// Root endpoint to check if the server is running
 app.get('/', (req, res) => {
-  res.send('Angel One Authenticated Backend is running!');
+  res.send('Angel One API Backend (Public Endpoints) is running!');
 });
 
-app.post('/api/login', async (req, res) => {
-    if (!ANGEL_API_KEY || !ANGEL_CLIENT_ID || !ANGEL_PASSWORD || !ANGEL_TOTP_SECRET) {
-        return res.status(500).json({ message: "API credentials are not configured on the server." });
-    }
-    try {
-        const totp = new pyotp.TOTP(ANGEL_TOTP_SECRET).now();
-        const loginResponse = await axios.post('https://apiconnect.angelbroking.com/rest/auth/angelbroking/user/v1/loginByPassword', {
-            clientcode: ANGEL_CLIENT_ID,
-            password: ANGEL_PASSWORD,
-            totp: totp
-        }, {
-            headers: {
-                'Content-Type': 'application/json', 'Accept': 'application/json', 'X-UserType': 'USER',
-                'X-SourceID': 'WEB', 'X-ClientLocalIP': '192.168.1.1', 'X-ClientPublicIP': '103.1.1.1',
-                'X-MACAddress': '00:00:00:00:00:00', 'X-PrivateKey': ANGEL_API_KEY
-            }
-        });
-
-        if (loginResponse.data.status === true) {
-            const responseData = loginResponse.data.data;
-            session.jwtToken = responseData.jwtToken;
-            session.feedToken = responseData.feedToken;
-            const profileResponse = await axios.get('https://apiconnect.angelbroking.com/rest/secure/angelbroking/user/v1/getProfile', {
-                headers: { 'Authorization': `Bearer ${session.jwtToken}` }
-            });
-            session.profile = profileResponse.data.data;
-            res.json({ status: true, message: "Login successful!", data: { name: session.profile.name, clientcode: session.profile.clientcode } });
-        } else {
-            res.status(401).json({ status: false, message: loginResponse.data.message || "Login failed." });
-        }
-    } catch (error) {
-        res.status(500).json({ status: false, message: "An error occurred during the login process.", error: error.response ? error.response.data : error.message });
-    }
-});
-
+/**
+ * @api {get} /api/instruments Get NSE Equity Instruments
+ * @description Fetches the list of all instruments from Angel One's public API.
+ */
 app.get('/api/instruments', async (req, res) => {
   try {
     const instrumentListUrl = 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json';
     const response = await axios.get(instrumentListUrl);
     const nseStocks = response.data.filter(instrument => 
-        instrument.exch_seg === 'NSE' && instrument.instrumenttype === 'AMX' && instrument.symbol.endsWith('-EQ')
+        instrument.exch_seg === 'NSE' && 
+        instrument.instrumenttype === 'AMX' &&
+        instrument.symbol.endsWith('-EQ')
     );
     res.json(nseStocks);
   } catch (error) {
+    console.error('Error fetching instruments:', error.message);
     res.status(500).json({ message: 'Failed to fetch instruments.' });
   }
 });
@@ -107,4 +66,9 @@ app.get('/api/market-news', async (req, res) => {
         console.error("Error fetching AI market news:", error.response ? error.response.data : error.message);
         res.status(500).json({ message: "Failed to generate market news." });
     }
+});
+
+
+app.listen(port, () => {
+  console.log(`Server listening on port ${port}`);
 });
