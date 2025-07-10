@@ -103,41 +103,40 @@ app.post('/api/chart-data', async (req, res) => {
         return res.status(500).json({ message: "AI API key is not configured on the server." });
     }
 
-    const { companyName } = req.body;
+    // **FIX:** Accept timeframe from the request body
+    const { companyName, timeframe } = req.body;
     if (!companyName) {
         return res.status(400).json({ message: "Company name is required." });
     }
 
-    try {
-        // **FIX:** Updated prompt to ask for OHLC data for a candlestick chart.
-        const prompt = `Generate a JSON object containing an array of exactly 30 simulated daily OHLC (Open, High, Low, Close) stock data points for the Indian company: ${companyName}. The array should be named "ohlc". Each object in the array must have a "date" (in "YYYY-MM-DD" format, sequential, ending today), and four numbers: "open", "high", "low", and "close". Ensure high is the highest and low is the lowest value for each day.`;
+    let prompt;
+    const effectiveTimeframe = timeframe || 'D'; // Default to Daily
 
+    // **FIX:** Create different prompts based on the selected timeframe
+    switch (effectiveTimeframe) {
+        case 'W':
+            prompt = `Generate a JSON object containing an array of exactly 24 simulated weekly OHLC (Open, High, Low, Close) stock data points for the Indian company: ${companyName}. The array should be named "ohlc". Each object must have a "date" (the Monday of that week in "YYYY-MM-DD" format, sequential, ending this week), and four numbers: "open", "high", "low", and "close".`;
+            break;
+        case 'M':
+            prompt = `Generate a JSON object containing an array of exactly 24 simulated monthly OHLC (Open, High, Low, Close) stock data points for the Indian company: ${companyName}. The array should be named "ohlc". Each object must have a "date" (the first day of that month in "YYYY-MM-DD" format, sequential, ending this month), and four numbers: "open", "high", "low", and "close".`;
+            break;
+        case '5m':
+        case '15m':
+        case '1h':
+        default: // Default to Daily ('D')
+            prompt = `Generate a JSON object containing an array of exactly 30 simulated daily OHLC (Open, High, Low, Close) stock data points for the Indian company: ${companyName}. The array should be named "ohlc". Each object must have a "date" (in "YYYY-MM-DD" format, sequential, ending today), and four numbers: "open", "high", "low", and "close".`;
+            break;
+    }
+
+    try {
         const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
-        
-        // **FIX:** Updated schema to match the new OHLC data structure.
         const payload = {
             contents: chatHistory,
             generationConfig: {
                 responseMimeType: "application/json",
                 responseSchema: {
                     type: "OBJECT",
-                    properties: {
-                        "ohlc": {
-                            type: "ARRAY",
-                            items: {
-                                type: "OBJECT",
-                                properties: {
-                                    "date": { "type": "STRING" },
-                                    "open": { "type": "NUMBER" },
-                                    "high": { "type": "NUMBER" },
-                                    "low": { "type": "NUMBER" },
-                                    "close": { "type": "NUMBER" }
-                                },
-                                required: ["date", "open", "high", "low", "close"]
-                            }
-                        }
-                    },
-                    required: ["ohlc"]
+                    properties: { "ohlc": { type: "ARRAY", items: { type: "OBJECT", properties: { "date": { "type": "STRING" }, "open": { "type": "NUMBER" }, "high": { "type": "NUMBER" }, "low": { "type": "NUMBER" }, "close": { "type": "NUMBER" } }, required: ["date", "open", "high", "low", "close"] } } }, required: ["ohlc"]
                 }
             }
         };
