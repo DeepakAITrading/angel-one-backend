@@ -38,19 +38,17 @@ app.get('/api/instruments', async (req, res) => {
 });
 
 /**
- * @api {get} /api/top-performers Get AI-Generated Top Performing Stocks with Live Prices
- * @description Generates a list of 10 top performing stocks and fetches their live prices.
+ * @api {get} /api/top-performers Get AI-Generated Top Performing Stocks
  */
 app.get('/api/top-performers', async (req, res) => {
     if (!GEMINI_API_KEY) {
         return res.status(500).json({ message: "AI API key is not configured on the server." });
     }
     try {
-        // Step 1: Get the list of top performing company names from the AI
-        const namePrompt = "Generate a JSON object with a key 'performers' which is an array of 10 of today's top-performing Indian NSE equity stocks. For each stock, provide its 'name' and 'symbol'.";
-        const nameChatHistory = [{ role: "user", parts: [{ text: namePrompt }] }];
-        const namePayload = {
-            contents: nameChatHistory,
+        const prompt = "Generate a JSON object with a key 'performers' which is an array of 10 of today's top-performing Indian NSE equity stocks. For each stock, provide its 'name', 'symbol', a realistic simulated 'price' (number), a positive 'change' (number), and a positive 'percentChange' (number).";
+        const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
+        const payload = {
+            contents: chatHistory,
             generationConfig: {
                 responseMimeType: "application/json",
                 responseSchema: {
@@ -62,9 +60,12 @@ app.get('/api/top-performers', async (req, res) => {
                                 type: "OBJECT",
                                 properties: {
                                     "name": { "type": "STRING" },
-                                    "symbol": { "type": "STRING" }
+                                    "symbol": { "type": "STRING" },
+                                    "price": { "type": "NUMBER" },
+                                    "change": { "type": "NUMBER" },
+                                    "percentChange": { "type": "NUMBER" }
                                 },
-                                required: ["name", "symbol"]
+                                required: ["name", "symbol", "price", "change", "percentChange"]
                             }
                         }
                     },
@@ -73,33 +74,15 @@ app.get('/api/top-performers', async (req, res) => {
             }
         };
 
-        const aiApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
-        const nameResponse = await axios.post(aiApiUrl, namePayload, { headers: { 'Content-Type': 'application/json' } });
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
+        const response = await axios.post(apiUrl, payload, { headers: { 'Content-Type': 'application/json' } });
 
-        if (!nameResponse.data.candidates || !nameResponse.data.candidates[0].content.parts) {
-             throw new Error("Invalid response structure from AI API for top performers list.");
+        if (response.data.candidates && response.data.candidates[0].content.parts) {
+            const performersData = JSON.parse(response.data.candidates[0].content.parts[0].text);
+            res.json(performersData);
+        } else {
+            throw new Error("Invalid response structure from AI API for top performers.");
         }
-        
-        const performersList = JSON.parse(nameResponse.data.candidates[0].content.parts[0].text).performers;
-
-        // Step 2: Use Google Search to get live prices for these companies
-        // This part is a placeholder for where the search would happen.
-        // For now, we will continue to simulate the price data as the search tool is not available.
-        const finalPerformers = performersList.map(stock => {
-            const price = (Math.random() * 4000) + 100;
-            const change = (Math.random() * 50) - 10;
-            const percentChange = (change / (price - change)) * 100;
-            return {
-                ...stock,
-                price: price,
-                change: change,
-                percentChange: percentChange
-            };
-        });
-
-
-        res.json({ performers: finalPerformers });
-
     } catch (error) {
         console.error(`Error fetching AI top performers:`, error.response ? error.response.data : error.message);
         res.status(500).json({ message: "Failed to generate top performers list." });
@@ -196,6 +179,53 @@ app.post('/api/technical-indicators', async (req, res) => {
     } catch (error) {
         console.error(`Error fetching AI technicals for ${companyName}:`, error.response ? error.response.data : error.message);
         res.status(500).json({ message: "Failed to generate technical indicators." });
+    }
+});
+
+/**
+ * @api {post} /api/company-details Get AI-Generated Company News
+ */
+app.post('/api/company-details', async (req, res) => {
+    if (!GEMINI_API_KEY) {
+        return res.status(500).json({ message: "AI API key is not configured on the server." });
+    }
+
+    const { companyName } = req.body;
+    if (!companyName) {
+        return res.status(400).json({ message: "Company name is required." });
+    }
+
+    try {
+        const prompt = `Provide a brief, one-paragraph summary of the most recent news and developments for the Indian company: ${companyName}. Focus on the last few weeks.`;
+        const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
+        
+        // **FIX:** Added a structured JSON response schema for reliability
+        const payload = {
+            contents: chatHistory,
+            generationConfig: {
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: "OBJECT",
+                    properties: {
+                        "details": { "type": "STRING" }
+                    },
+                    required: ["details"]
+                }
+            }
+        };
+
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
+        const response = await axios.post(apiUrl, payload, { headers: { 'Content-Type': 'application/json' } });
+
+        if (response.data.candidates && response.data.candidates[0].content.parts) {
+            const detailsData = JSON.parse(response.data.candidates[0].content.parts[0].text);
+            res.json(detailsData);
+        } else {
+            throw new Error("Invalid response structure from AI API for company details.");
+        }
+    } catch (error) {
+        console.error(`Error fetching AI details for ${companyName}:`, error.response ? error.response.data : error.message);
+        res.status(500).json({ message: "Failed to generate company details." });
     }
 });
 
