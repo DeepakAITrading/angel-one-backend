@@ -38,62 +38,56 @@ app.get('/api/instruments', async (req, res) => {
 });
 
 /**
- * @api {get} /api/market-news Get AI-Generated Market News
+ * @api {get} /api/top-performers Get AI-Generated Top Performing Stocks
+ * @description Generates a list of 10 top performing stocks.
  */
-app.get('/api/market-news', async (req, res) => {
+app.get('/api/top-performers', async (req, res) => {
     if (!GEMINI_API_KEY) {
         return res.status(500).json({ message: "AI API key is not configured on the server." });
     }
     try {
-        const prompt = "Provide a brief, one-paragraph summary of today's key highlights and trends in the Indian stock market (NSE & BSE). Mention the performance of key indices like NIFTY 50 and SENSEX, and any notable sector movements.";
+        const prompt = "Generate a JSON object with a key 'performers' which is an array of 10 of today's top-performing Indian NSE equity stocks. For each stock, provide its 'name', 'symbol', and a realistic simulated 'price'.";
         const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
-        const payload = { contents: chatHistory };
+        const payload = {
+            contents: chatHistory,
+            generationConfig: {
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: "OBJECT",
+                    properties: {
+                        "performers": {
+                            type: "ARRAY",
+                            items: {
+                                type: "OBJECT",
+                                properties: {
+                                    "name": { "type": "STRING" },
+                                    "symbol": { "type": "STRING" },
+                                    "price": { "type": "NUMBER" }
+                                },
+                                required: ["name", "symbol", "price"]
+                            }
+                        }
+                    },
+                    required: ["performers"]
+                }
+            }
+        };
+
         const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
         const response = await axios.post(apiUrl, payload, { headers: { 'Content-Type': 'application/json' } });
 
         if (response.data.candidates && response.data.candidates[0].content.parts) {
-            const newsText = response.data.candidates[0].content.parts[0].text;
-            res.json({ news: newsText });
+            const performersData = JSON.parse(response.data.candidates[0].content.parts[0].text);
+            res.json(performersData);
         } else {
-            throw new Error("Invalid response structure from AI API.");
+            throw new Error("Invalid response structure from AI API for top performers.");
         }
     } catch (error) {
-        console.error("Error fetching AI market news:", error.response ? error.response.data : error.message);
-        res.status(500).json({ message: "Failed to generate market news." });
+        console.error(`Error fetching AI top performers:`, error.response ? error.response.data : error.message);
+        res.status(500).json({ message: "Failed to generate top performers list." });
     }
 });
 
-/**
- * @api {post} /api/company-details Get AI-Generated Company News
- */
-app.post('/api/company-details', async (req, res) => {
-    if (!GEMINI_API_KEY) {
-        return res.status(500).json({ message: "AI API key is not configured on the server." });
-    }
-
-    const { companyName } = req.body;
-    if (!companyName) {
-        return res.status(400).json({ message: "Company name is required." });
-    }
-
-    try {
-        const prompt = `Provide a brief, one-paragraph summary of the most recent news and developments for the Indian company: ${companyName}. Focus on the last few weeks.`;
-        const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
-        const payload = { contents: chatHistory };
-        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
-        const response = await axios.post(apiUrl, payload, { headers: { 'Content-Type': 'application/json' } });
-
-        if (response.data.candidates && response.data.candidates[0].content.parts) {
-            const detailsText = response.data.candidates[0].content.parts[0].text;
-            res.json({ details: detailsText });
-        } else {
-            throw new Error("Invalid response structure from AI API for company details.");
-        }
-    } catch (error) {
-        console.error(`Error fetching AI details for ${companyName}:`, error.response ? error.response.data : error.message);
-        res.status(500).json({ message: "Failed to generate company details." });
-    }
-});
 
 /**
  * @api {post} /api/chart-data Get AI-Generated Candlestick Chart Data
@@ -111,7 +105,6 @@ app.post('/api/chart-data', async (req, res) => {
     let prompt;
     const effectiveTimeframe = timeframe || 'D';
 
-    // **FIX:** Create different prompts based on the selected timeframe
     switch (effectiveTimeframe) {
         case 'W':
             prompt = `Generate a JSON object containing an array of exactly 24 simulated weekly OHLCV (Open, High, Low, Close, Volume) stock data points for the Indian company: ${companyName}. The array should be named "ohlc". Each object must have a "date" (the Monday of that week in "YYYY-MM-DD" format, sequential, ending this week), and five numbers: "open", "high", "low", "close", and "volume".`;
@@ -119,39 +112,20 @@ app.post('/api/chart-data', async (req, res) => {
         case 'M':
             prompt = `Generate a JSON object containing an array of exactly 24 simulated monthly OHLCV (Open, High, Low, Close, Volume) stock data points for the Indian company: ${companyName}. The array should be named "ohlc". Each object must have a "date" (the first day of that month in "YYYY-MM-DD" format, sequential, ending this month), and five numbers: "open", "high", "low", "close", and "volume".`;
             break;
-        default: // Default to Daily ('D') and other intraday timeframes
+        default:
             prompt = `Generate a JSON object containing an array of exactly 30 simulated daily OHLCV (Open, High, Low, Close, Volume) stock data points for the Indian company: ${companyName}. The array should be named "ohlc". Each object must have a "date" (in "YYYY-MM-DD" format, sequential, ending today), and five numbers: "open", "high", "low", "close", and "volume".`;
             break;
     }
 
     try {
         const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
-        
-        // **FIX:** Updated schema to include volume.
         const payload = {
             contents: chatHistory,
             generationConfig: {
                 responseMimeType: "application/json",
                 responseSchema: {
                     type: "OBJECT",
-                    properties: {
-                        "ohlc": {
-                            type: "ARRAY",
-                            items: {
-                                type: "OBJECT",
-                                properties: {
-                                    "date": { "type": "STRING" },
-                                    "open": { "type": "NUMBER" },
-                                    "high": { "type": "NUMBER" },
-                                    "low": { "type": "NUMBER" },
-                                    "close": { "type": "NUMBER" },
-                                    "volume": { "type": "NUMBER" }
-                                },
-                                required: ["date", "open", "high", "low", "close", "volume"]
-                            }
-                        }
-                    },
-                    required: ["ohlc"]
+                    properties: { "ohlc": { type: "ARRAY", items: { type: "OBJECT", properties: { "date": { "type": "STRING" }, "open": { "type": "NUMBER" }, "high": { "type": "NUMBER" }, "low": { "type": "NUMBER" }, "close": { "type": "NUMBER" }, "volume": { "type": "NUMBER" } }, required: ["date", "open", "high", "low", "close", "volume"] } } }, required: ["ohlc"]
                 }
             }
         };
