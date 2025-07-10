@@ -7,7 +7,7 @@ const cors = require('cors');
 const app = express();
 const port = process.env.PORT || 3001;
 
-// --- Access the new Gemini API key from environment variables ---
+// --- Access the Gemini API key from environment variables ---
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 app.use(cors());
@@ -15,7 +15,6 @@ app.use(express.json());
 
 // --- API Endpoints ---
 
-// Root endpoint to check if the server is running
 app.get('/', (req, res) => {
   res.send('Angel One API Backend (Public Endpoints) is running!');
 });
@@ -27,13 +26,18 @@ app.get('/', (req, res) => {
 app.get('/api/instruments', async (req, res) => {
   try {
     const instrumentListUrl = 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json';
+    console.log("Fetching instruments from:", instrumentListUrl);
     const response = await axios.get(instrumentListUrl);
+    
+    // This filter correctly finds NSE equity stocks.
     const nseStocks = response.data.filter(instrument => 
         instrument.exch_seg === 'NSE' && 
-        instrument.instrumenttype === 'AMX' &&
         instrument.symbol.endsWith('-EQ')
     );
+    
+    console.log(`Found ${nseStocks.length} NSE equity stocks. Sending to frontend.`);
     res.json(nseStocks);
+
   } catch (error) {
     console.error('Error fetching instruments:', error.message);
     res.status(500).json({ message: 'Failed to fetch instruments.' });
@@ -45,7 +49,6 @@ app.get('/api/instruments', async (req, res) => {
  * @description Calls the Gemini API to generate a summary of the latest Indian market news.
  */
 app.get('/api/market-news', async (req, res) => {
-    // Check if the API key is configured on the server
     if (!GEMINI_API_KEY) {
         return res.status(500).json({ message: "AI API key is not configured on the server." });
     }
@@ -56,7 +59,6 @@ app.get('/api/market-news', async (req, res) => {
         const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
         const payload = { contents: chatHistory };
         
-        // Use the GEMINI_API_KEY from the environment
         const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
         
         const response = await axios.post(apiUrl, payload, {
