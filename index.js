@@ -96,7 +96,7 @@ app.post('/api/company-details', async (req, res) => {
 });
 
 /**
- * @api {post} /api/chart-data Get AI-Generated Chart Data
+ * @api {post} /api/chart-data Get AI-Generated Candlestick Chart Data
  */
 app.post('/api/chart-data', async (req, res) => {
     if (!GEMINI_API_KEY) {
@@ -109,13 +109,37 @@ app.post('/api/chart-data', async (req, res) => {
     }
 
     try {
-        const prompt = `Generate a JSON object containing an array of exactly 30 simulated daily closing stock prices for the Indian company: ${companyName}. The array should be named "prices". Each object in the array must have a "date" (in "YYYY-MM-DD" format, sequential, ending today) and a "price" (as a number).`;
+        // **FIX:** Updated prompt to ask for OHLC data for a candlestick chart.
+        const prompt = `Generate a JSON object containing an array of exactly 30 simulated daily OHLC (Open, High, Low, Close) stock data points for the Indian company: ${companyName}. The array should be named "ohlc". Each object in the array must have a "date" (in "YYYY-MM-DD" format, sequential, ending today), and four numbers: "open", "high", "low", and "close". Ensure high is the highest and low is the lowest value for each day.`;
 
         const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
         
+        // **FIX:** Updated schema to match the new OHLC data structure.
         const payload = {
             contents: chatHistory,
-            generationConfig: { responseMimeType: "application/json", responseSchema: { type: "OBJECT", properties: { "prices": { type: "ARRAY", items: { type: "OBJECT", properties: { "date": { "type": "STRING" }, "price": { "type": "NUMBER" } }, required: ["date", "price"] } } }, required: ["prices"] } }
+            generationConfig: {
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: "OBJECT",
+                    properties: {
+                        "ohlc": {
+                            type: "ARRAY",
+                            items: {
+                                type: "OBJECT",
+                                properties: {
+                                    "date": { "type": "STRING" },
+                                    "open": { "type": "NUMBER" },
+                                    "high": { "type": "NUMBER" },
+                                    "low": { "type": "NUMBER" },
+                                    "close": { "type": "NUMBER" }
+                                },
+                                required: ["date", "open", "high", "low", "close"]
+                            }
+                        }
+                    },
+                    required: ["ohlc"]
+                }
+            }
         };
 
         const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
@@ -135,7 +159,6 @@ app.post('/api/chart-data', async (req, res) => {
 
 /**
  * @api {post} /api/technical-indicators Get AI-Generated Technical Indicators
- * @description Generates simulated technical indicator values for a company.
  */
 app.post('/api/technical-indicators', async (req, res) => {
     if (!GEMINI_API_KEY) {
@@ -149,25 +172,10 @@ app.post('/api/technical-indicators', async (req, res) => {
 
     try {
         const prompt = `For the Indian company ${companyName}, generate a JSON object with simulated technical analysis data. The object must contain these keys: "currentPrice" (a realistic number), "rsi" (a number between 20 and 80), "dma20" (a number), "dma50" (a number), and "dma200" (a number).`;
-
         const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
-        
         const payload = {
             contents: chatHistory,
-            generationConfig: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: "OBJECT",
-                    properties: {
-                        "currentPrice": { "type": "NUMBER" },
-                        "rsi": { "type": "NUMBER" },
-                        "dma20": { "type": "NUMBER" },
-                        "dma50": { "type": "NUMBER" },
-                        "dma200": { "type": "NUMBER" }
-                    },
-                    required: ["currentPrice", "rsi", "dma20", "dma50", "dma200"]
-                }
-            }
+            generationConfig: { responseMimeType: "application/json", responseSchema: { type: "OBJECT", properties: { "currentPrice": { "type": "NUMBER" }, "rsi": { "type": "NUMBER" }, "dma20": { "type": "NUMBER" }, "dma50": { "type": "NUMBER" }, "dma200": { "type": "NUMBER" } }, required: ["currentPrice", "rsi", "dma20", "dma50", "dma200"] } }
         };
 
         const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
