@@ -64,8 +64,8 @@ app.get('/api/market-news', async (req, res) => {
 });
 
 /**
- * @api {post} /api/company-details Get AI-Generated Company Details
- * @description Generates a profile for a specific company using its name.
+ * @api {post} /api/company-details Get AI-Generated Company News
+ * @description Generates a summary of recent news for a specific company.
  */
 app.post('/api/company-details', async (req, res) => {
     if (!GEMINI_API_KEY) {
@@ -78,7 +78,8 @@ app.post('/api/company-details', async (req, res) => {
     }
 
     try {
-        const prompt = `Provide a concise, one-paragraph business summary for the Indian company: ${companyName}. Include its primary sector, key products or services, and its general market position.`;
+        // **FIX:** Changed the prompt to ask for recent news instead of a profile.
+        const prompt = `Provide a brief, one-paragraph summary of the most recent news and developments for the Indian company: ${companyName}. Focus on the last few weeks.`;
         const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
         const payload = { contents: chatHistory };
         const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
