@@ -1,7 +1,7 @@
 {
-  "name": "angel-one-backend",
+  "name": "angel-one-api-backend",
   "version": "1.0.0",
-  "description": "Backend to fetch NSE instruments from Angel One API",
+  "description": "Backend for Angel One API (public endpoints only)",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
