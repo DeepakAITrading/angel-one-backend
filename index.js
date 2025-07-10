@@ -39,15 +39,17 @@ app.get('/api/instruments', async (req, res) => {
 
 /**
  * @api {get} /api/top-performers Get AI-Generated Top Performing Stocks
- * @description Generates a list of 10 top performing stocks.
  */
 app.get('/api/top-performers', async (req, res) => {
     if (!GEMINI_API_KEY) {
         return res.status(500).json({ message: "AI API key is not configured on the server." });
     }
     try {
-        const prompt = "Generate a JSON object with a key 'performers' which is an array of 10 of today's top-performing Indian NSE equity stocks. For each stock, provide its 'name', 'symbol', and a realistic simulated 'price'.";
+        // **FIX:** Updated prompt to get change and percentChange
+        const prompt = "Generate a JSON object with a key 'performers' which is an array of 10 of today's top-performing Indian NSE equity stocks. For each stock, provide its 'name', 'symbol', a realistic simulated 'price' (number), a positive 'change' (number), and a positive 'percentChange' (number).";
         const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
+        
+        // **FIX:** Updated schema to include new fields
         const payload = {
             contents: chatHistory,
             generationConfig: {
@@ -62,9 +64,11 @@ app.get('/api/top-performers', async (req, res) => {
                                 properties: {
                                     "name": { "type": "STRING" },
                                     "symbol": { "type": "STRING" },
-                                    "price": { "type": "NUMBER" }
+                                    "price": { "type": "NUMBER" },
+                                    "change": { "type": "NUMBER" },
+                                    "percentChange": { "type": "NUMBER" }
                                 },
-                                required: ["name", "symbol", "price"]
+                                required: ["name", "symbol", "price", "change", "percentChange"]
                             }
                         }
                     },
