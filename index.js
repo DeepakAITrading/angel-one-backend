@@ -108,12 +108,15 @@ app.post('/api/login', async (req, res) => {
             console.log("Login successful for user:", session.profile.name);
             res.json({ status: true, message: "Login successful!", data: { name: session.profile.name, clientcode: session.profile.clientcode } });
         } else {
-            console.error("Angel One Login Failed:", loginResponse.data.message);
-            res.status(401).json({ status: false, message: loginResponse.data.message || "Login failed." });
+            // **FIX:** Improved logging for failed login attempts
+            console.error("Angel One Login Failed. Reason:", loginResponse.data.message);
+            res.status(401).json({ status: false, message: loginResponse.data.message || "Login failed due to an unknown reason from Angel One." });
         }
     } catch (error) {
-        console.error("Critical error during login process:", error.response ? error.response.data : error.message);
-        res.status(500).json({ status: false, message: "An error occurred during the login process.", error: error.response ? error.response.data.message : error.message });
+        // **FIX:** Improved logging for critical errors
+        const errorMsg = error.response ? JSON.stringify(error.response.data) : error.message;
+        console.error("Critical error during login process:", errorMsg);
+        res.status(500).json({ status: false, message: "An unexpected error occurred during the login process.", error: error.response ? error.response.data.message : error.message });
     }
 });
 
@@ -157,7 +160,6 @@ app.post('/api/technical-indicators', requireLogin, async (req, res) => {
         fromdate.setFullYear(fromdate.getFullYear() - 1);
         fromdate = fromdate.toISOString().slice(0, 10);
 
-        // **FIX:** Directly call the helper function instead of a local HTTP request
         const candles = await getHistoricalData({
             exchange, symboltoken, timeframe: 'ONE_DAY', fromdate, todate
         });
@@ -234,6 +236,52 @@ app.get('/api/top-performers', async (req, res) => {
     } catch (error) {
         console.error(`Error fetching AI top performers:`, error.response ? error.response.data : error.message);
         res.status(500).json({ message: "Failed to generate top performers list." });
+    }
+});
+
+/**
+ * @api {post} /api/company-details Get AI-Generated Company News
+ */
+app.post('/api/company-details', async (req, res) => {
+    if (!GEMINI_API_KEY) {
+        return res.status(500).json({ message: "AI API key is not configured on the server." });
+    }
+
+    const { companyName } = req.body;
+    if (!companyName) {
+        return res.status(400).json({ message: "Company name is required." });
+    }
+
+    try {
+        const prompt = `Provide a brief, one-paragraph summary of the most recent news and developments for the Indian company: ${companyName}. Focus on the last few weeks.`;
+        const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
+        
+        const payload = {
+            contents: chatHistory,
+            generationConfig: {
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: "OBJECT",
+                    properties: {
+                        "details": { "type": "STRING" }
+                    },
+                    required: ["details"]
+                }
+            }
+        };
+
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
+        const response = await axios.post(apiUrl, payload, { headers: { 'Content-Type': 'application/json' } });
+
+        if (response.data.candidates && response.data.candidates[0].content.parts) {
+            const detailsData = JSON.parse(response.data.candidates[0].content.parts[0].text);
+            res.json(detailsData);
+        } else {
+            throw new Error("Invalid response structure from AI API for company details.");
+        }
+    } catch (error) {
+        console.error(`Error fetching AI details for ${companyName}:`, error.response ? error.response.data : error.message);
+        res.status(500).json({ message: "Failed to generate company details." });
     }
 });
 
