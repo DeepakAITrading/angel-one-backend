@@ -220,8 +220,8 @@ app.get('/api/market-data', requireLogin, async (req, res) => {
         const topStocksData = quoteData.filter(d => nifty50Tokens.includes(d.symbolToken));
 
         const topPerformers = topStocksData.map(stock => {
-            const change = stock.ltp - stock.close;
-            const percentChange = stock.close !== 0 ? (change / stock.close) * 100 : 0;
+            const change = stock.ltp - (stock.close || stock.ohlc.close);
+            const percentChange = (stock.close || stock.ohlc.close) !== 0 ? (change / (stock.close || stock.ohlc.close)) * 100 : 0;
             return { name: stock.name, symbol: stock.tradingSymbol, price: stock.ltp, change, percentChange };
         }).sort((a, b) => b.percentChange - a.percentChange).slice(0, 10);
 
@@ -277,6 +277,7 @@ app.post('/api/company-details', async (req, res) => {
         res.status(500).json({ message: "Failed to generate company details." });
     }
 });
+
 
 app.listen(port, () => {
   console.log(`Server listening on port ${port}`);
