@@ -3,7 +3,7 @@
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
-const { authenticator } = require('otplib'); // Correct Node.js library for TOTP
+const { authenticator } = require('otplib');
 const { RSI, SMA } = require('technicalindicators');
 
 const app = express();
@@ -35,6 +35,32 @@ const requireLogin = (req, res, next) => {
     next();
 };
 
+// --- Helper function to get historical data ---
+const getHistoricalData = async (params) => {
+    const { symboltoken, exchange, timeframe, fromdate, todate } = params;
+    try {
+        const response = await axios.post('https://apiconnect.angelbroking.com/rest/secure/angelbroking/historical/v1/getCandleData', {
+            exchange,
+            symboltoken,
+            interval: timeframe,
+            fromdate,
+            todate
+        }, {
+            headers: {
+                'Authorization': `Bearer ${session.jwtToken}`,
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'X-UserType': 'USER',
+                'X-SourceID': 'WEB'
+            }
+        });
+        return response.data.data;
+    } catch (error) {
+        console.error("Error fetching historical data from Angel One:", error.response ? error.response.data : error.message);
+        throw new Error('Failed to fetch historical data from Angel One.');
+    }
+};
+
 
 // --- API Endpoints ---
 
@@ -46,11 +72,14 @@ app.get('/', (req, res) => {
  * @api {post} /api/login Login to Angel One
  */
 app.post('/api/login', async (req, res) => {
+    console.log("Login attempt started...");
     if (!ANGEL_API_KEY || !ANGEL_CLIENT_ID || !ANGEL_PASSWORD || !ANGEL_TOTP_SECRET) {
+        console.error("Server credentials not configured.");
         return res.status(500).json({ message: "API credentials are not configured on the server." });
     }
     try {
         const totp = authenticator.generate(ANGEL_TOTP_SECRET);
+        console.log("Generated TOTP.");
         
         const loginResponse = await axios.post('https://apiconnect.angelbroking.com/rest/auth/angelbroking/user/v1/loginByPassword', {
             clientcode: ANGEL_CLIENT_ID,
@@ -64,6 +93,8 @@ app.post('/api/login', async (req, res) => {
             }
         });
 
+        console.log("Angel One Login API response received.");
+
         if (loginResponse.data.status === true) {
             const responseData = loginResponse.data.data;
             session.jwtToken = responseData.jwtToken;
@@ -74,12 +105,15 @@ app.post('/api/login', async (req, res) => {
                 headers: { 'Authorization': `Bearer ${session.jwtToken}` }
             });
             session.profile = profileResponse.data.data;
+            console.log("Login successful for user:", session.profile.name);
             res.json({ status: true, message: "Login successful!", data: { name: session.profile.name, clientcode: session.profile.clientcode } });
         } else {
+            console.error("Angel One Login Failed:", loginResponse.data.message);
             res.status(401).json({ status: false, message: loginResponse.data.message || "Login failed." });
         }
     } catch (error) {
-        res.status(500).json({ status: false, message: "An error occurred during the login process.", error: error.response ? error.response.data : error.message });
+        console.error("Critical error during login process:", error.response ? error.response.data : error.message);
+        res.status(500).json({ status: false, message: "An error occurred during the login process.", error: error.response ? error.response.data.message : error.message });
     }
 });
 
@@ -104,26 +138,11 @@ app.get('/api/instruments', requireLogin, async (req, res) => {
  * @api {post} /api/historical-data Get Historical Data from Angel One
  */
 app.post('/api/historical-data', requireLogin, async (req, res) => {
-    const { symboltoken, exchange, timeframe, fromdate, todate } = req.body;
     try {
-        const response = await axios.post('https://apiconnect.angelbroking.com/rest/secure/angelbroking/historical/v1/getCandleData', {
-            exchange,
-            symboltoken,
-            interval: timeframe,
-            fromdate,
-            todate
-        }, {
-            headers: {
-                'Authorization': `Bearer ${session.jwtToken}`,
-                'Content-Type': 'application/json',
-                'Accept': 'application/json',
-                'X-UserType': 'USER',
-                'X-SourceID': 'WEB'
-            }
-        });
-        res.json(response.data.data);
+        const data = await getHistoricalData(req.body);
+        res.json(data);
     } catch (error) {
-        res.status(500).json({ message: 'Failed to fetch historical data.', error: error.response ? error.response.data : error.message });
+        res.status(500).json({ message: error.message });
     }
 });
 
@@ -135,19 +154,19 @@ app.post('/api/technical-indicators', requireLogin, async (req, res) => {
     try {
         const todate = new Date().toISOString().slice(0, 10);
         let fromdate = new Date();
-        fromdate.setFullYear(fromdate.getFullYear() - 1); // Fetch 1 year of data for calculations
+        fromdate.setFullYear(fromdate.getFullYear() - 1);
         fromdate = fromdate.toISOString().slice(0, 10);
 
-        const histResponse = await axios.post(`http://127.0.0.1:${port}/api/historical-data`, {
+        // **FIX:** Directly call the helper function instead of a local HTTP request
+        const candles = await getHistoricalData({
             exchange, symboltoken, timeframe: 'ONE_DAY', fromdate, todate
-        }, { headers: { 'Authorization': `Bearer ${session.jwtToken}` } });
+        });
 
-        const candles = histResponse.data;
-        if (!candles || candles.length < 200) { // Need enough data for 200DMA
+        if (!candles || candles.length < 200) {
             return res.status(404).json({ message: "Not enough historical data to calculate all indicators." });
         }
 
-        const closingPrices = candles.map(c => c[4]); // O, H, L, C, V -> Index 4 is Close
+        const closingPrices = candles.map(c => c[4]);
 
         const rsi = RSI.calculate({ values: closingPrices, period: 14 });
         const sma20 = SMA.calculate({ values: closingPrices, period: 20 });
