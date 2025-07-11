@@ -3,7 +3,7 @@
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
-const pyotp = require('pyotp');
+const { authenticator } = require('otplib'); // Correct Node.js library for TOTP
 const { RSI, SMA } = require('technicalindicators');
 
 const app = express();
@@ -50,7 +50,8 @@ app.post('/api/login', async (req, res) => {
         return res.status(500).json({ message: "API credentials are not configured on the server." });
     }
     try {
-        const totp = new pyotp.TOTP(ANGEL_TOTP_SECRET).now();
+        const totp = authenticator.generate(ANGEL_TOTP_SECRET);
+        
         const loginResponse = await axios.post('https://apiconnect.angelbroking.com/rest/auth/angelbroking/user/v1/loginByPassword', {
             clientcode: ANGEL_CLIENT_ID,
             password: ANGEL_PASSWORD,
@@ -214,51 +215,6 @@ app.get('/api/top-performers', async (req, res) => {
     } catch (error) {
         console.error(`Error fetching AI top performers:`, error.response ? error.response.data : error.message);
         res.status(500).json({ message: "Failed to generate top performers list." });
-    }
-});
-
-/**
- * @api {post} /api/company-details Get AI-Generated Company News
- */
-app.post('/api/company-details', async (req, res) => {
-    if (!GEMINI_API_KEY) {
-        return res.status(500).json({ message: "AI API key is not configured on the server." });
-    }
-
-    const { companyName } = req.body;
-    if (!companyName) {
-        return res.status(400).json({ message: "Company name is required." });
-    }
-
-    try {
-        const prompt = `Provide a brief, one-paragraph summary of the most recent news and developments for the Indian company: ${companyName}. Focus on the last few weeks.`;
-        const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
-        const payload = {
-            contents: chatHistory,
-            generationConfig: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: "OBJECT",
-                    properties: {
-                        "details": { "type": "STRING" }
-                    },
-                    required: ["details"]
-                }
-            }
-        };
-
-        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
-        const response = await axios.post(apiUrl, payload, { headers: { 'Content-Type': 'application/json' } });
-
-        if (response.data.candidates && response.data.candidates[0].content.parts) {
-            const detailsData = JSON.parse(response.data.candidates[0].content.parts[0].text);
-            res.json(detailsData);
-        } else {
-            throw new Error("Invalid response structure from AI API for company details.");
-        }
-    } catch (error) {
-        console.error(`Error fetching AI details for ${companyName}:`, error.response ? error.response.data : error.message);
-        res.status(500).json({ message: "Failed to generate company details." });
     }
 });
 
