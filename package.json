@@ -1,7 +1,7 @@
 {
-  "name": "angel-one-api-backend",
+  "name": "angel-one-auth-backend",
   "version": "1.0.0",
-  "description": "Backend for Angel One API (public endpoints only)",
+  "description": "Authenticated backend for Angel One",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -11,6 +11,8 @@
   "dependencies": {
     "axios": "^1.7.2",
     "cors": "^2.8.5",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "pyotp": "^2.6.0",
+    "technicalindicators": "^3.1.0"
   }
 }
