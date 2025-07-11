@@ -108,12 +108,10 @@ app.post('/api/login', async (req, res) => {
             console.log("Login successful for user:", session.profile.name);
             res.json({ status: true, message: "Login successful!", data: { name: session.profile.name, clientcode: session.profile.clientcode } });
         } else {
-            // **FIX:** Improved logging for failed login attempts
             console.error("Angel One Login Failed. Reason:", loginResponse.data.message);
             res.status(401).json({ status: false, message: loginResponse.data.message || "Login failed due to an unknown reason from Angel One." });
         }
     } catch (error) {
-        // **FIX:** Improved logging for critical errors
         const errorMsg = error.response ? JSON.stringify(error.response.data) : error.message;
         console.error("Critical error during login process:", errorMsg);
         res.status(500).json({ status: false, message: "An unexpected error occurred during the login process.", error: error.response ? error.response.data.message : error.message });
@@ -188,103 +186,57 @@ app.post('/api/technical-indicators', requireLogin, async (req, res) => {
 });
 
 /**
- * @api {get} /api/top-performers Get AI-Generated Top Performing Stocks
+ * @api {get} /api/top-performers Get Top Performing Stocks
  */
-app.get('/api/top-performers', async (req, res) => {
-    if (!GEMINI_API_KEY) {
-        return res.status(500).json({ message: "AI API key is not configured on the server." });
-    }
+app.get('/api/top-performers', requireLogin, async (req, res) => {
     try {
-        const prompt = "Generate a JSON object with a key 'performers' which is an array of 10 of today's top-performing Indian NSE equity stocks. For each stock, provide its 'name', 'symbol', a realistic simulated 'price' (number), a positive 'change' (number), and a positive 'percentChange' (number).";
-        const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
+        const nifty50Tokens = ["2885", "11536", "1594", "3456", "1333", "5258", "10940", "3045", "1660", "1394"];
         const payload = {
-            contents: chatHistory,
-            generationConfig: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: "OBJECT",
-                    properties: {
-                        "performers": {
-                            type: "ARRAY",
-                            items: {
-                                type: "OBJECT",
-                                properties: {
-                                    "name": { "type": "STRING" },
-                                    "symbol": { "type": "STRING" },
-                                    "price": { "type": "NUMBER" },
-                                    "change": { "type": "NUMBER" },
-                                    "percentChange": { "type": "NUMBER" }
-                                },
-                                required: ["name", "symbol", "price", "change", "percentChange"]
-                            }
-                        }
-                    },
-                    required: ["performers"]
-                }
-            }
+            "mode": "OHLC",
+            "exchangeTokens": { "NSE": nifty50Tokens }
         };
+        const response = await axios.post('https://apiconnect.angelbroking.com/rest/secure/angelbroking/market/v1/getQuote', payload, {
+            headers: { 'Authorization': `Bearer ${session.jwtToken}` }
+        });
 
-        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
-        const response = await axios.post(apiUrl, payload, { headers: { 'Content-Type': 'application/json' } });
+        const performers = response.data.data.map(stock => {
+            const change = stock.ltp - stock.ohlc.close;
+            const percentChange = (change / stock.ohlc.close) * 100;
+            return {
+                name: stock.name,
+                symbol: stock.tradingSymbol,
+                price: stock.ltp,
+                change: change,
+                percentChange: percentChange
+            };
+        }).sort((a, b) => b.percentChange - a.percentChange).slice(0, 10);
 
-        if (response.data.candidates && response.data.candidates[0].content.parts) {
-            const performersData = JSON.parse(response.data.candidates[0].content.parts[0].text);
-            res.json(performersData);
-        } else {
-            throw new Error("Invalid response structure from AI API for top performers.");
-        }
+        res.json({ performers });
     } catch (error) {
-        console.error(`Error fetching AI top performers:`, error.response ? error.response.data : error.message);
-        res.status(500).json({ message: "Failed to generate top performers list." });
+        res.status(500).json({ message: 'Failed to fetch top performers.', error: error.response ? error.response.data : error.message });
     }
 });
 
 /**
- * @api {post} /api/company-details Get AI-Generated Company News
+ * @api {get} /api/market-indices Get Live Index Data
  */
-app.post('/api/company-details', async (req, res) => {
-    if (!GEMINI_API_KEY) {
-        return res.status(500).json({ message: "AI API key is not configured on the server." });
-    }
-
-    const { companyName } = req.body;
-    if (!companyName) {
-        return res.status(400).json({ message: "Company name is required." });
-    }
-
+app.get('/api/market-indices', requireLogin, async (req, res) => {
     try {
-        const prompt = `Provide a brief, one-paragraph summary of the most recent news and developments for the Indian company: ${companyName}. Focus on the last few weeks.`;
-        const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
-        
         const payload = {
-            contents: chatHistory,
-            generationConfig: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: "OBJECT",
-                    properties: {
-                        "details": { "type": "STRING" }
-                    },
-                    required: ["details"]
-                }
+            "mode": "LTP",
+            "exchangeTokens": {
+                "NSE": ["26000", "26009"], // NIFTY 50, BANKNIFTY
+                "BSE": ["1", "12"] // SENSEX, FINNIFTY is on NSE but using a placeholder for now
             }
         };
-
-        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
-        const response = await axios.post(apiUrl, payload, { headers: { 'Content-Type': 'application/json' } });
-
-        if (response.data.candidates && response.data.candidates[0].content.parts) {
-            const detailsData = JSON.parse(response.data.candidates[0].content.parts[0].text);
-            res.json(detailsData);
-        } else {
-            throw new Error("Invalid response structure from AI API for company details.");
-        }
+        const response = await axios.post('https://apiconnect.angelbroking.com/rest/secure/angelbroking/market/v1/getQuote', payload, {
+            headers: { 'Authorization': `Bearer ${session.jwtToken}` }
+        });
+        res.json(response.data.data);
     } catch (error) {
-        console.error(`Error fetching AI details for ${companyName}:`, error.response ? error.response.data : error.message);
-        res.status(500).json({ message: "Failed to generate company details." });
+        res.status(500).json({ message: 'Failed to fetch market indices.', error: error.response ? error.response.data : error.message });
     }
 });
-
 
 app.listen(port, () => {
   console.log(`Server listening on port ${port}`);
