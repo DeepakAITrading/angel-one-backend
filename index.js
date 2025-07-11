@@ -79,8 +79,6 @@ app.post('/api/login', async (req, res) => {
     }
     try {
         const totp = authenticator.generate(ANGEL_TOTP_SECRET);
-        console.log("Generated TOTP.");
-        
         const loginResponse = await axios.post('https://apiconnect.angelbroking.com/rest/auth/angelbroking/user/v1/loginByPassword', {
             clientcode: ANGEL_CLIENT_ID,
             password: ANGEL_PASSWORD,
@@ -93,8 +91,6 @@ app.post('/api/login', async (req, res) => {
             }
         });
 
-        console.log("Angel One Login API response received.");
-
         if (loginResponse.data.status === true) {
             const responseData = loginResponse.data.data;
             session.jwtToken = responseData.jwtToken;
@@ -106,10 +102,10 @@ app.post('/api/login', async (req, res) => {
             });
             session.profile = profileResponse.data.data;
             console.log("Login successful for user:", session.profile.name);
-            res.json({ status: true, message: "Login successful!", data: { name: session.profile.name, clientcode: session.profile.clientcode } });
+            res.json({ status: true, message: "Login successful!", data: { name: session.profile.name } });
         } else {
             console.error("Angel One Login Failed. Reason:", loginResponse.data.message);
-            res.status(401).json({ status: false, message: loginResponse.data.message || "Login failed due to an unknown reason from Angel One." });
+            res.status(401).json({ status: false, message: loginResponse.data.message || "Login failed." });
         }
     } catch (error) {
         const errorMsg = error.response ? JSON.stringify(error.response.data) : error.message;
@@ -148,11 +144,12 @@ app.post('/api/historical-data', requireLogin, async (req, res) => {
 });
 
 /**
- * @api {post} /api/technical-indicators Get Technical Indicators from Angel One Data
+ * @api {post} /api/stock-analysis Get Full Analysis for a Stock
  */
-app.post('/api/technical-indicators', requireLogin, async (req, res) => {
+app.post('/api/stock-analysis', requireLogin, async (req, res) => {
     const { symboltoken, exchange } = req.body;
     try {
+        // 1. Get Historical Data for calculations
         const todate = new Date().toISOString().slice(0, 10);
         let fromdate = new Date();
         fromdate.setFullYear(fromdate.getFullYear() - 1);
@@ -165,82 +162,37 @@ app.post('/api/technical-indicators', requireLogin, async (req, res) => {
         if (!candles || candles.length < 200) {
             return res.status(404).json({ message: "Not enough historical data to calculate all indicators." });
         }
-
         const closingPrices = candles.map(c => c[4]);
 
+        // 2. Calculate Indicators
         const rsi = RSI.calculate({ values: closingPrices, period: 14 });
         const sma20 = SMA.calculate({ values: closingPrices, period: 20 });
         const sma50 = SMA.calculate({ values: closingPrices, period: 50 });
         const sma200 = SMA.calculate({ values: closingPrices, period: 200 });
 
+        // 3. Get Live Quote for current price
+        const quotePayload = { "mode": "LTP", "exchangeTokens": { [exchange]: [symboltoken] } };
+        const quoteResponse = await axios.post('https://apiconnect.angelbroking.com/rest/secure/angelbroking/market/v1/getQuote', quotePayload, {
+            headers: { 'Authorization': `Bearer ${session.jwtToken}` }
+        });
+        const liveData = quoteResponse.data.data;
+
         res.json({
-            currentPrice: closingPrices[closingPrices.length - 1],
+            currentPrice: liveData.ltp,
             rsi: rsi[rsi.length - 1],
             dma20: sma20[sma20.length - 1],
             dma50: sma50[sma50.length - 1],
             dma200: sma200[sma200.length - 1]
         });
     } catch (error) {
-        res.status(500).json({ message: 'Failed to calculate technical indicators.', error: error.message });
+        res.status(500).json({ message: 'Failed to calculate stock analysis.', error: error.message });
     }
 });
 
 /**
- * @api {get} /api/top-performers Get AI-Generated Top Performing Stocks
+ * @api {post} /api/company-events Get AI-Generated Corporate Events
  */
-app.get('/api/top-performers', async (req, res) => {
-    if (!GEMINI_API_KEY) {
-        return res.status(500).json({ message: "AI API key is not configured on the server." });
-    }
-    try {
-        const prompt = "Generate a JSON object with a key 'performers' which is an array of 10 of today's top-performing Indian NSE equity stocks. For each stock, provide its 'name', 'symbol', a realistic simulated 'price' (number), a positive 'change' (number), and a positive 'percentChange' (number).";
-        const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
-        const payload = {
-            contents: chatHistory,
-            generationConfig: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: "OBJECT",
-                    properties: {
-                        "performers": {
-                            type: "ARRAY",
-                            items: {
-                                type: "OBJECT",
-                                properties: {
-                                    "name": { "type": "STRING" },
-                                    "symbol": { "type": "STRING" },
-                                    "price": { "type": "NUMBER" },
-                                    "change": { "type": "NUMBER" },
-                                    "percentChange": { "type": "NUMBER" }
-                                },
-                                required: ["name", "symbol", "price", "change", "percentChange"]
-                            }
-                        }
-                    },
-                    required: ["performers"]
-                }
-            }
-        };
-
-        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
-        const response = await axios.post(apiUrl, payload, { headers: { 'Content-Type': 'application/json' } });
-
-        if (response.data.candidates && response.data.candidates[0].content.parts) {
-            const performersData = JSON.parse(response.data.candidates[0].content.parts[0].text);
-            res.json(performersData);
-        } else {
-            throw new Error("Invalid response structure from AI API for top performers.");
-        }
-    } catch (error) {
-        console.error(`Error fetching AI top performers:`, error.response ? error.response.data : error.message);
-        res.status(500).json({ message: "Failed to generate top performers list." });
-    }
-});
-
-/**
- * @api {post} /api/company-details Get AI-Generated Company News
- */
-app.post('/api/company-details', async (req, res) => {
+app.post('/api/company-events', async (req, res) => {
     if (!GEMINI_API_KEY) {
         return res.status(500).json({ message: "AI API key is not configured on the server." });
     }
@@ -251,9 +203,9 @@ app.post('/api/company-details', async (req, res) => {
     }
 
     try {
-        const prompt = `Provide a brief, one-paragraph summary of the most recent news and developments for the Indian company: ${companyName}. Focus on the last few weeks.`;
-        const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
+        const prompt = `Generate a JSON object with a key 'events' which is an array of recent or upcoming corporate events for the Indian company: ${companyName}. Include events like 'Dividend', 'Earnings', 'AGM', or 'Stock Split'. For each event, provide a 'date' (YYYY-MM-DD) and a short 'description'. If no specific events are found, return an empty array.`;
         
+        const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
         const payload = {
             contents: chatHistory,
             generationConfig: {
@@ -261,9 +213,19 @@ app.post('/api/company-details', async (req, res) => {
                 responseSchema: {
                     type: "OBJECT",
                     properties: {
-                        "details": { "type": "STRING" }
+                        "events": {
+                            type: "ARRAY",
+                            items: {
+                                type: "OBJECT",
+                                properties: {
+                                    "date": { "type": "STRING" },
+                                    "description": { "type": "STRING" }
+                                },
+                                required: ["date", "description"]
+                            }
+                        }
                     },
-                    required: ["details"]
+                    required: ["events"]
                 }
             }
         };
@@ -272,14 +234,14 @@ app.post('/api/company-details', async (req, res) => {
         const response = await axios.post(apiUrl, payload, { headers: { 'Content-Type': 'application/json' } });
 
         if (response.data.candidates && response.data.candidates[0].content.parts) {
-            const detailsData = JSON.parse(response.data.candidates[0].content.parts[0].text);
-            res.json(detailsData);
+            const eventsData = JSON.parse(response.data.candidates[0].content.parts[0].text);
+            res.json(eventsData);
         } else {
-            throw new Error("Invalid response structure from AI API for company details.");
+            throw new Error("Invalid response structure from AI API for company events.");
         }
     } catch (error) {
-        console.error(`Error fetching AI details for ${companyName}:`, error.response ? error.response.data : error.message);
-        res.status(500).json({ message: "Failed to generate company details." });
+        console.error(`Error fetching AI events for ${companyName}:`, error.response ? error.response.data : error.message);
+        res.status(500).json({ message: "Failed to generate company events." });
     }
 });
 
