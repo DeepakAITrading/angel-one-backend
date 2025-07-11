@@ -149,7 +149,6 @@ app.post('/api/historical-data', requireLogin, async (req, res) => {
 app.post('/api/stock-analysis', requireLogin, async (req, res) => {
     const { symboltoken, exchange } = req.body;
     try {
-        // 1. Get Historical Data for calculations
         const todate = new Date().toISOString().slice(0, 10);
         let fromdate = new Date();
         fromdate.setFullYear(fromdate.getFullYear() - 1);
@@ -164,13 +163,11 @@ app.post('/api/stock-analysis', requireLogin, async (req, res) => {
         }
         const closingPrices = candles.map(c => c[4]);
 
-        // 2. Calculate Indicators
         const rsi = RSI.calculate({ values: closingPrices, period: 14 });
         const sma20 = SMA.calculate({ values: closingPrices, period: 20 });
         const sma50 = SMA.calculate({ values: closingPrices, period: 50 });
         const sma200 = SMA.calculate({ values: closingPrices, period: 200 });
 
-        // 3. Get Live Quote for current price
         const quotePayload = { "mode": "LTP", "exchangeTokens": { [exchange]: [symboltoken] } };
         const quoteResponse = await axios.post('https://apiconnect.angelbroking.com/rest/secure/angelbroking/market/v1/getQuote', quotePayload, {
             headers: { 'Authorization': `Bearer ${session.jwtToken}` }
@@ -190,61 +187,42 @@ app.post('/api/stock-analysis', requireLogin, async (req, res) => {
 });
 
 /**
- * @api {post} /api/company-events Get AI-Generated Corporate Events
+ * @api {get} /api/market-data Get Live Index and Top Performer Data
  */
-app.post('/api/company-events', async (req, res) => {
-    if (!GEMINI_API_KEY) {
-        return res.status(500).json({ message: "AI API key is not configured on the server." });
-    }
-
-    const { companyName } = req.body;
-    if (!companyName) {
-        return res.status(400).json({ message: "Company name is required." });
-    }
-
+app.get('/api/market-data', requireLogin, async (req, res) => {
     try {
-        const prompt = `Generate a JSON object with a key 'events' which is an array of recent or upcoming corporate events for the Indian company: ${companyName}. Include events like 'Dividend', 'Earnings', 'AGM', or 'Stock Split'. For each event, provide a 'date' (YYYY-MM-DD) and a short 'description'. If no specific events are found, return an empty array.`;
-        
-        const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
-        const payload = {
-            contents: chatHistory,
-            generationConfig: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: "OBJECT",
-                    properties: {
-                        "events": {
-                            type: "ARRAY",
-                            items: {
-                                type: "OBJECT",
-                                properties: {
-                                    "date": { "type": "STRING" },
-                                    "description": { "type": "STRING" }
-                                },
-                                required: ["date", "description"]
-                            }
-                        }
-                    },
-                    required: ["events"]
-                }
+        const indexTokens = ["26000", "26009", "26037"];
+        const sensexToken = ["99926000"];
+        const nifty50Tokens = ["2885", "11536", "1594", "3456", "1333", "5258", "10940", "3045", "1660", "1394"];
+
+        const quotePayload = {
+            "mode": "FULL",
+            "exchangeTokens": {
+                "NSE": [...indexTokens, ...nifty50Tokens],
+                "BSE": sensexToken
             }
         };
+        const quoteResponse = await axios.post('https://apiconnect.angelbroking.com/rest/secure/angelbroking/market/v1/getQuote', quotePayload, {
+            headers: { 'Authorization': `Bearer ${session.jwtToken}` }
+        });
 
-        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
-        const response = await axios.post(apiUrl, payload, { headers: { 'Content-Type': 'application/json' } });
+        const allData = quoteResponse.data.data;
+        
+        const indices = allData.filter(d => indexTokens.includes(d.symbolToken) || sensexToken.includes(d.symbolToken));
+        const topStocksData = allData.filter(d => nifty50Tokens.includes(d.symbolToken));
 
-        if (response.data.candidates && response.data.candidates[0].content.parts) {
-            const eventsData = JSON.parse(response.data.candidates[0].content.parts[0].text);
-            res.json(eventsData);
-        } else {
-            throw new Error("Invalid response structure from AI API for company events.");
-        }
+        const topPerformers = topStocksData.map(stock => {
+            const change = stock.ltp - stock.close;
+            const percentChange = (change / stock.close) * 100;
+            return { name: stock.name, symbol: stock.tradingSymbol, price: stock.ltp, change, percentChange };
+        }).sort((a, b) => b.percentChange - a.percentChange).slice(0, 10);
+
+        res.json({ indices, topPerformers });
+
     } catch (error) {
-        console.error(`Error fetching AI events for ${companyName}:`, error.response ? error.response.data : error.message);
-        res.status(500).json({ message: "Failed to generate company events." });
+        res.status(500).json({ message: 'Failed to fetch market data.', error: error.response ? error.response.data : error.message });
     }
 });
-
 
 app.listen(port, () => {
   console.log(`Server listening on port ${port}`);
