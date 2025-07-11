@@ -3,38 +3,166 @@
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
+const pyotp = require('pyotp');
+const { RSI, SMA } = require('technicalindicators');
 
 const app = express();
 const port = process.env.PORT || 3001;
 
-// --- Access the Gemini API key from environment variables ---
+// --- Securely access your credentials from environment variables ---
+const ANGEL_API_KEY = process.env.ANGEL_API_KEY;
+const ANGEL_CLIENT_ID = process.env.ANGEL_CLIENT_ID;
+const ANGEL_PASSWORD = process.env.ANGEL_PASSWORD;
+const ANGEL_TOTP_SECRET = process.env.ANGEL_TOTP_SECRET;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
+// --- In-memory storage for session tokens ---
+let session = {
+    jwtToken: null,
+    feedToken: null,
+    refreshToken: null,
+    profile: null
+};
+
 app.use(cors());
-app.use(express.json()); // Middleware to parse JSON bodies
+app.use(express.json());
+
+// --- Middleware to check for login status ---
+const requireLogin = (req, res, next) => {
+    if (!session.jwtToken) {
+        return res.status(401).json({ message: "Not logged in. Please login first." });
+    }
+    next();
+};
+
 
 // --- API Endpoints ---
 
 app.get('/', (req, res) => {
-  res.send('Angel One API Backend (Public Endpoints) is running!');
+  res.send('Angel One Authenticated Backend is running!');
+});
+
+/**
+ * @api {post} /api/login Login to Angel One
+ */
+app.post('/api/login', async (req, res) => {
+    if (!ANGEL_API_KEY || !ANGEL_CLIENT_ID || !ANGEL_PASSWORD || !ANGEL_TOTP_SECRET) {
+        return res.status(500).json({ message: "API credentials are not configured on the server." });
+    }
+    try {
+        const totp = new pyotp.TOTP(ANGEL_TOTP_SECRET).now();
+        const loginResponse = await axios.post('https://apiconnect.angelbroking.com/rest/auth/angelbroking/user/v1/loginByPassword', {
+            clientcode: ANGEL_CLIENT_ID,
+            password: ANGEL_PASSWORD,
+            totp: totp
+        }, {
+            headers: {
+                'Content-Type': 'application/json', 'Accept': 'application/json', 'X-UserType': 'USER',
+                'X-SourceID': 'WEB', 'X-ClientLocalIP': '192.168.1.1', 'X-ClientPublicIP': '103.1.1.1',
+                'X-MACAddress': '00:00:00:00:00:00', 'X-PrivateKey': ANGEL_API_KEY
+            }
+        });
+
+        if (loginResponse.data.status === true) {
+            const responseData = loginResponse.data.data;
+            session.jwtToken = responseData.jwtToken;
+            session.feedToken = responseData.feedToken;
+            session.refreshToken = responseData.refreshToken;
+            
+            const profileResponse = await axios.get('https://apiconnect.angelbroking.com/rest/secure/angelbroking/user/v1/getProfile', {
+                headers: { 'Authorization': `Bearer ${session.jwtToken}` }
+            });
+            session.profile = profileResponse.data.data;
+            res.json({ status: true, message: "Login successful!", data: { name: session.profile.name, clientcode: session.profile.clientcode } });
+        } else {
+            res.status(401).json({ status: false, message: loginResponse.data.message || "Login failed." });
+        }
+    } catch (error) {
+        res.status(500).json({ status: false, message: "An error occurred during the login process.", error: error.response ? error.response.data : error.message });
+    }
 });
 
 /**
  * @api {get} /api/instruments Get NSE Equity Instruments
  */
-app.get('/api/instruments', async (req, res) => {
-  try {
-    const instrumentListUrl = 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json';
-    const response = await axios.get(instrumentListUrl);
-    const nseStocks = response.data.filter(instrument => 
-        instrument.exch_seg === 'NSE' && 
-        instrument.symbol.endsWith('-EQ')
-    );
-    res.json(nseStocks);
-  } catch (error) {
-    console.error('Error fetching instruments:', error.message);
-    res.status(500).json({ message: 'Failed to fetch instruments.' });
-  }
+app.get('/api/instruments', requireLogin, async (req, res) => {
+    try {
+        const instrumentListUrl = 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json';
+        const response = await axios.get(instrumentListUrl);
+        const nseStocks = response.data.filter(instrument => 
+            instrument.exch_seg === 'NSE' && 
+            instrument.symbol.endsWith('-EQ')
+        );
+        res.json(nseStocks);
+    } catch (error) {
+        res.status(500).json({ message: 'Failed to fetch instruments.' });
+    }
+});
+
+/**
+ * @api {post} /api/historical-data Get Historical Data from Angel One
+ */
+app.post('/api/historical-data', requireLogin, async (req, res) => {
+    const { symboltoken, exchange, timeframe, fromdate, todate } = req.body;
+    try {
+        const response = await axios.post('https://apiconnect.angelbroking.com/rest/secure/angelbroking/historical/v1/getCandleData', {
+            exchange,
+            symboltoken,
+            interval: timeframe,
+            fromdate,
+            todate
+        }, {
+            headers: {
+                'Authorization': `Bearer ${session.jwtToken}`,
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'X-UserType': 'USER',
+                'X-SourceID': 'WEB'
+            }
+        });
+        res.json(response.data.data);
+    } catch (error) {
+        res.status(500).json({ message: 'Failed to fetch historical data.', error: error.response ? error.response.data : error.message });
+    }
+});
+
+/**
+ * @api {post} /api/technical-indicators Get Technical Indicators from Angel One Data
+ */
+app.post('/api/technical-indicators', requireLogin, async (req, res) => {
+    const { symboltoken, exchange } = req.body;
+    try {
+        const todate = new Date().toISOString().slice(0, 10);
+        let fromdate = new Date();
+        fromdate.setFullYear(fromdate.getFullYear() - 1); // Fetch 1 year of data for calculations
+        fromdate = fromdate.toISOString().slice(0, 10);
+
+        const histResponse = await axios.post(`http://127.0.0.1:${port}/api/historical-data`, {
+            exchange, symboltoken, timeframe: 'ONE_DAY', fromdate, todate
+        }, { headers: { 'Authorization': `Bearer ${session.jwtToken}` } });
+
+        const candles = histResponse.data;
+        if (!candles || candles.length < 200) { // Need enough data for 200DMA
+            return res.status(404).json({ message: "Not enough historical data to calculate all indicators." });
+        }
+
+        const closingPrices = candles.map(c => c[4]); // O, H, L, C, V -> Index 4 is Close
+
+        const rsi = RSI.calculate({ values: closingPrices, period: 14 });
+        const sma20 = SMA.calculate({ values: closingPrices, period: 20 });
+        const sma50 = SMA.calculate({ values: closingPrices, period: 50 });
+        const sma200 = SMA.calculate({ values: closingPrices, period: 200 });
+
+        res.json({
+            currentPrice: closingPrices[closingPrices.length - 1],
+            rsi: rsi[rsi.length - 1],
+            dma20: sma20[sma20.length - 1],
+            dma50: sma50[sma50.length - 1],
+            dma200: sma200[sma200.length - 1]
+        });
+    } catch (error) {
+        res.status(500).json({ message: 'Failed to calculate technical indicators.', error: error.message });
+    }
 });
 
 /**
@@ -89,99 +217,6 @@ app.get('/api/top-performers', async (req, res) => {
     }
 });
 
-
-/**
- * @api {post} /api/chart-data Get AI-Generated Candlestick Chart Data
- */
-app.post('/api/chart-data', async (req, res) => {
-    if (!GEMINI_API_KEY) {
-        return res.status(500).json({ message: "AI API key is not configured on the server." });
-    }
-
-    const { companyName, timeframe } = req.body;
-    if (!companyName) {
-        return res.status(400).json({ message: "Company name is required." });
-    }
-
-    let prompt;
-    const effectiveTimeframe = timeframe || 'D';
-
-    switch (effectiveTimeframe) {
-        case 'W':
-            prompt = `Generate a JSON object containing an array of exactly 24 simulated weekly OHLCV (Open, High, Low, Close, Volume) stock data points for the Indian company: ${companyName}. The array should be named "ohlc". Each object must have a "date" (the Monday of that week in "YYYY-MM-DD" format, sequential, ending this week), and five numbers: "open", "high", "low", "close", and "volume".`;
-            break;
-        case 'M':
-            prompt = `Generate a JSON object containing an array of exactly 24 simulated monthly OHLCV (Open, High, Low, Close, Volume) stock data points for the Indian company: ${companyName}. The array should be named "ohlc". Each object must have a "date" (the first day of that month in "YYYY-MM-DD" format, sequential, ending this month), and five numbers: "open", "high", "low", "close", and "volume".`;
-            break;
-        default:
-            prompt = `Generate a JSON object containing an array of exactly 30 simulated daily OHLCV (Open, High, Low, Close, Volume) stock data points for the Indian company: ${companyName}. The array should be named "ohlc". Each object must have a "date" (in "YYYY-MM-DD" format, sequential, ending today), and five numbers: "open", "high", "low", "close", and "volume".`;
-            break;
-    }
-
-    try {
-        const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
-        const payload = {
-            contents: chatHistory,
-            generationConfig: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: "OBJECT",
-                    properties: { "ohlc": { type: "ARRAY", items: { type: "OBJECT", properties: { "date": { "type": "STRING" }, "open": { "type": "NUMBER" }, "high": { "type": "NUMBER" }, "low": { "type": "NUMBER" }, "close": { "type": "NUMBER" }, "volume": { "type": "NUMBER" } }, required: ["date", "open", "high", "low", "close", "volume"] } } }, required: ["ohlc"]
-                }
-            }
-        };
-
-        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
-        const response = await axios.post(apiUrl, payload, { headers: { 'Content-Type': 'application/json' } });
-
-        if (response.data.candidates && response.data.candidates[0].content.parts) {
-            const chartData = JSON.parse(response.data.candidates[0].content.parts[0].text);
-            res.json(chartData);
-        } else {
-            throw new Error("Invalid response structure from AI API for chart data.");
-        }
-    } catch (error) {
-        console.error(`Error fetching AI chart data for ${companyName}:`, error.response ? error.response.data : error.message);
-        res.status(500).json({ message: "Failed to generate chart data." });
-    }
-});
-
-/**
- * @api {post} /api/technical-indicators Get AI-Generated Technical Indicators
- */
-app.post('/api/technical-indicators', async (req, res) => {
-    if (!GEMINI_API_KEY) {
-        return res.status(500).json({ message: "AI API key is not configured on the server." });
-    }
-
-    const { companyName } = req.body;
-    if (!companyName) {
-        return res.status(400).json({ message: "Company name is required." });
-    }
-
-    try {
-        const prompt = `For the Indian company ${companyName}, generate a JSON object with simulated technical analysis data. The object must contain these keys: "currentPrice" (a realistic number), "rsi" (a number between 20 and 80), "dma20" (a number), "dma50" (a number), and "dma200" (a number).`;
-        const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
-        const payload = {
-            contents: chatHistory,
-            generationConfig: { responseMimeType: "application/json", responseSchema: { type: "OBJECT", properties: { "currentPrice": { "type": "NUMBER" }, "rsi": { "type": "NUMBER" }, "dma20": { "type": "NUMBER" }, "dma50": { "type": "NUMBER" }, "dma200": { "type": "NUMBER" } }, required: ["currentPrice", "rsi", "dma20", "dma50", "dma200"] } }
-        };
-
-        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
-        const response = await axios.post(apiUrl, payload, { headers: { 'Content-Type': 'application/json' } });
-
-        if (response.data.candidates && response.data.candidates[0].content.parts) {
-            const technicalData = JSON.parse(response.data.candidates[0].content.parts[0].text);
-            res.json(technicalData);
-        } else {
-            throw new Error("Invalid response structure from AI API for technical indicators.");
-        }
-    } catch (error) {
-        console.error(`Error fetching AI technicals for ${companyName}:`, error.response ? error.response.data : error.message);
-        res.status(500).json({ message: "Failed to generate technical indicators." });
-    }
-});
-
 /**
  * @api {post} /api/company-details Get AI-Generated Company News
  */
@@ -198,8 +233,6 @@ app.post('/api/company-details', async (req, res) => {
     try {
         const prompt = `Provide a brief, one-paragraph summary of the most recent news and developments for the Indian company: ${companyName}. Focus on the last few weeks.`;
         const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
-        
-        // **FIX:** Added a structured JSON response schema for reliability
         const payload = {
             contents: chatHistory,
             generationConfig: {
