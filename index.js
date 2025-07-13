@@ -1,4 +1,5 @@
 // index.js
+
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
@@ -13,7 +14,7 @@ const ANGEL_API_KEY = process.env.ANGEL_API_KEY;
 const ANGEL_CLIENT_ID = process.env.ANGEL_CLIENT_ID;
 const ANGEL_PASSWORD = process.env.ANGEL_PASSWORD;
 const ANGEL_TOTP_SECRET = process.env.ANGEL_TOTP_SECRET;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY; // This is not used in the current code, but kept as per your original
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY; // This is the key for Google AI API
 
 // --- In-memory storage for session tokens ---
 let session = {
@@ -350,6 +351,52 @@ app.get('/api/market-data', requireLogin, async (req, res) => {
         res.status(500).json({ message: 'Failed to fetch market data.', error: error.response ? error.response.data : error.message });
     }
 });
+
+// NEW: Endpoint to generate news summary using Google AI API
+app.post('/api/generate-news-summary', requireLogin, async (req, res) => {
+    const { companyName } = req.body;
+
+    if (!companyName) {
+        return res.status(400).json({ message: "Company name is required for news summary." });
+    }
+    if (!GEMINI_API_KEY) {
+        console.error("GEMINI_API_KEY is not configured on the server.");
+        return res.status(500).json({ message: "Google AI API key is not configured on the server." });
+    }
+
+    try {
+        let chatHistory = [];
+        const prompt = `Summarize recent news about ${companyName} from reliable financial sources. Provide 3-5 concise bullet points. If no recent news is found, state that.`;
+        chatHistory.push({ role: "user", parts: [{ text: prompt }] });
+
+        const payload = { contents: chatHistory };
+        const apiKey = GEMINI_API_KEY; // Use the configured API key
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+        const response = await fetch(apiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        const result = await response.json();
+
+        if (result.candidates && result.candidates.length > 0 &&
+            result.candidates[0].content && result.candidates[0].content.parts &&
+            result.candidates[0].content.parts.length > 0) {
+            const newsSummary = result.candidates[0].content.parts[0].text;
+            res.json({ newsSummary });
+        } else {
+            console.warn("Google AI API response structure unexpected or empty:", result);
+            res.status(500).json({ message: "Failed to generate news summary. Unexpected AI response." });
+        }
+
+    } catch (error) {
+        console.error("Error calling Google AI API:", error.response ? error.response.data : error.message);
+        res.status(500).json({ message: "Failed to generate news summary due to an AI API error.", error: error.message });
+    }
+});
+
 
 app.listen(port, () => {
     console.log(`Server listening on port ${port}`);
