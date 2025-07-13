@@ -64,13 +64,23 @@ const getHistoricalData = async (params) => {
 
 // --- API Endpoints ---
 
-app.get('/', (req, res) => {
-  res.send('Angel One Authenticated Backend is running!');
+app.get('/api/status', async (req, res) => {
+    let aiStatus = 'Offline';
+    try {
+        if (GEMINI_API_KEY) {
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash?key=${GEMINI_API_KEY}`;
+            await axios.get(apiUrl);
+            aiStatus = 'Live';
+        }
+    } catch (error) {
+        console.error("AI API status check failed:", error.message);
+    }
+    res.json({
+        server: 'Live',
+        aiApi: aiStatus
+    });
 });
 
-/**
- * @api {post} /api/login Login to Angel One
- */
 app.post('/api/login', async (req, res) => {
     console.log("Login attempt started...");
     if (!ANGEL_API_KEY || !ANGEL_CLIENT_ID || !ANGEL_PASSWORD || !ANGEL_TOTP_SECRET) {
@@ -114,9 +124,6 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-/**
- * @api {get} /api/instruments Get NSE Equity Instruments
- */
 app.get('/api/instruments', requireLogin, async (req, res) => {
     try {
         const instrumentListUrl = 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json';
@@ -131,9 +138,6 @@ app.get('/api/instruments', requireLogin, async (req, res) => {
     }
 });
 
-/**
- * @api {post} /api/historical-data Get Historical Data from Angel One
- */
 app.post('/api/historical-data', requireLogin, async (req, res) => {
     try {
         const data = await getHistoricalData(req.body);
@@ -143,9 +147,6 @@ app.post('/api/historical-data', requireLogin, async (req, res) => {
     }
 });
 
-/**
- * @api {post} /api/stock-analysis Get Full Analysis for a Stock
- */
 app.post('/api/stock-analysis', requireLogin, async (req, res) => {
     const { symboltoken, exchange } = req.body;
     try {
@@ -186,9 +187,6 @@ app.post('/api/stock-analysis', requireLogin, async (req, res) => {
     }
 });
 
-/**
- * @api {get} /api/market-data Get Live Index and Top Performer Data
- */
 app.get('/api/market-data', requireLogin, async (req, res) => {
     try {
         const indexTokens = ["26000", "26009", "26037"];
@@ -212,7 +210,8 @@ app.get('/api/market-data', requireLogin, async (req, res) => {
                 ...d,
                 ltp: d.ohlc.close,
                 netChange: 0,
-                percentChange: 0
+                percentChange: 0,
+                close: d.ohlc.close
             }));
         }
         
