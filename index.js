@@ -15,8 +15,7 @@ const ANGEL_CLIENT_ID = process.env.ANGEL_CLIENT_ID;
 const ANGEL_PASSWORD = process.env.ANGEL_PASSWORD;
 const ANGEL_TOTP_SECRET = process.env.ANGEL_TOTP_SECRET;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY; // This is the key for Google AI API
-// NEW: Optional Historical Data API Key - Use this ONLY if Angel One provides a separate key for historical data.
-// Otherwise, the main ANGEL_API_KEY should cover historical access if it's a "Trading API" type.
+// Optional Historical Data API Key - Use this ONLY if Angel One provides a separate key for historical data.
 const ANGEL_HISTORICAL_API_KEY = process.env.ANGEL_HISTORICAL_API_KEY; 
 
 
@@ -53,15 +52,11 @@ const getHistoricalData = async (params) => {
     };
 
     // Conditionally add X-PrivateKey if ANGEL_HISTORICAL_API_KEY is provided
-    // This is for scenarios where a separate key might be needed for historical data,
-    // though typically the main Trading API key covers this.
     if (ANGEL_HISTORICAL_API_KEY) {
         headers['X-PrivateKey'] = ANGEL_HISTORICAL_API_KEY;
         console.log("Using ANGEL_HISTORICAL_API_KEY for historical data call.");
     } else {
-        // If no specific historical key, ensure the primary API key is used if needed by Angel One for historical endpoints
-        // (though JWT token is usually primary for secure endpoints post-login)
-        headers['X-PrivateKey'] = ANGEL_API_KEY; // Fallback to primary API key for X-PrivateKey header
+        headers['X-PrivateKey'] = ANGEL_API_KEY; 
         console.log("ANGEL_HISTORICAL_API_KEY not set, using primary ANGEL_API_KEY for X-PrivateKey header in historical data call.");
     }
 
