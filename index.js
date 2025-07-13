@@ -169,7 +169,9 @@ app.post('/api/stock-analysis', requireLogin, async (req, res) => {
             const quoteResponse = await axios.post('https://apiconnect.angelbroking.com/rest/secure/angelbroking/market/v1/getQuote', quotePayload, {
                 headers: { 'Authorization': `Bearer ${session.jwtToken}` }
             });
-            const liveData = quoteResponse.data.data;
+            
+            // Robustly check if response.data is an object and has a 'data' property
+            const liveData = (typeof quoteResponse.data === 'object' && quoteResponse.data !== null) ? quoteResponse.data.data : null;
 
             if (liveData && liveData.ltp !== undefined && liveData.ltp !== null) { // Check for valid LTP
                 currentPrice = liveData.ltp;
@@ -271,9 +273,11 @@ app.get('/api/market-data', requireLogin, async (req, res) => {
             
             console.log("FULL Mode API Raw Response:", JSON.stringify(quoteResponse.data, null, 2));
 
-            // Check if live data is actually returned and not empty
-            if (quoteResponse.data && Array.isArray(quoteResponse.data.data) && quoteResponse.data.data.length > 0 && quoteResponse.data.data[0].ltp !== undefined) {
-                quoteData = quoteResponse.data.data;
+            // Robustly check if response.data is an object and has a 'data' property
+            const fullModeData = (typeof quoteResponse.data === 'object' && quoteResponse.data !== null) ? quoteResponse.data.data : null;
+
+            if (fullModeData && Array.isArray(fullModeData) && fullModeData.length > 0 && fullModeData[0].ltp !== undefined) {
+                quoteData = fullModeData;
                 console.log("Fetched LIVE market data.");
             } else {
                 // If live data is empty or LTP is undefined, assume market is closed or no live data
@@ -291,11 +295,12 @@ app.get('/api/market-data', requireLogin, async (req, res) => {
             
             console.log("OHLC Mode API Raw Response:", JSON.stringify(ohlcResponse.data, null, 2));
 
-            let ohlcRawData = ohlcResponse.data.data;
+            // Robustly check if response.data is an object and has a 'data' property
+            let ohlcRawData = (typeof ohlcResponse.data === 'object' && ohlcResponse.data !== null) ? ohlcResponse.data.data : null;
 
             // FIX: Ensure ohlcRawData is an array before iterating
             if (!Array.isArray(ohlcRawData)) {
-                console.warn("ohlcRawData from OHLC API is not an array, received:", ohlcRawData);
+                console.warn("ohlcRawData from OHLC API is not an array or is null, received:", ohlcRawData);
                 ohlcRawData = []; // Initialize as empty array to prevent iteration error
             }
             console.log("OHLC Raw Data (after array check):", JSON.stringify(ohlcRawData, null, 2));
