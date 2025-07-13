@@ -56,8 +56,8 @@ const getHistoricalData = async (params) => {
         });
         return response.data.data;
     } catch (error) {
-        console.error("Error fetching historical data from Angel One:", error.response ? error.response.data : error.message);
-        throw new Error('Failed to fetch historical data from Angel One.');
+        console.error(`Error fetching historical data for ${symboltoken} from Angel One:`, error.response ? error.response.data : error.message);
+        throw new Error(`Failed to fetch historical data for ${symboltoken} from Angel One.`);
     }
 };
 
@@ -257,6 +257,8 @@ app.get('/api/market-data', requireLogin, async (req, res) => {
             "BSE": [...indexTokensBSE]
         };
 
+        console.log("Market Data Request: tokensToFetch", tokensToFetch);
+
         let quoteData = [];
         let isLiveMarketData = true; // Flag to indicate if data is truly live or historical fallback
 
@@ -267,6 +269,8 @@ app.get('/api/market-data', requireLogin, async (req, res) => {
                 headers: { 'Authorization': `Bearer ${session.jwtToken}` }
             });
             
+            console.log("FULL Mode API Raw Response:", JSON.stringify(quoteResponse.data, null, 2));
+
             // Check if live data is actually returned and not empty
             if (quoteResponse.data && Array.isArray(quoteResponse.data.data) && quoteResponse.data.data.length > 0 && quoteResponse.data.data[0].ltp !== undefined) {
                 quoteData = quoteResponse.data.data;
@@ -285,6 +289,8 @@ app.get('/api/market-data', requireLogin, async (req, res) => {
                 headers: { 'Authorization': `Bearer ${session.jwtToken}` }
             });
             
+            console.log("OHLC Mode API Raw Response:", JSON.stringify(ohlcResponse.data, null, 2));
+
             let ohlcRawData = ohlcResponse.data.data;
 
             // FIX: Ensure ohlcRawData is an array before iterating
@@ -292,6 +298,8 @@ app.get('/api/market-data', requireLogin, async (req, res) => {
                 console.warn("ohlcRawData from OHLC API is not an array, received:", ohlcRawData);
                 ohlcRawData = []; // Initialize as empty array to prevent iteration error
             }
+            console.log("OHLC Raw Data (after array check):", JSON.stringify(ohlcRawData, null, 2));
+
 
             // Prepare to fetch previous day's close for each instrument
             const today = new Date();
@@ -310,6 +318,8 @@ app.get('/api/market-data', requireLogin, async (req, res) => {
                         fromdate: tempPrevDay.toISOString().slice(0, 10),
                         todate: tempPrevDay.toISOString().slice(0, 10)
                     });
+                    console.log(`Historical data for ${item.symbolToken} on ${tempPrevDay.toISOString().slice(0, 10)}:`, prevDayCandles);
+
                     if (prevDayCandles && prevDayCandles.length > 0) {
                         previousClose = prevDayCandles[0][4]; // Close price of that day
                         break;
@@ -332,9 +342,15 @@ app.get('/api/market-data', requireLogin, async (req, res) => {
             console.log("Fetched OHLC fallback market data.");
         }
         
+        console.log("Final quoteData before filtering:", JSON.stringify(quoteData, null, 2));
+
         // Filter and process indices and top performers based on the collected quoteData
         const indices = quoteData.filter(d => indexTokensNSE.includes(d.symbolToken) || indexTokensBSE.includes(d.symbolToken));
         const topStocksData = quoteData.filter(d => nifty50Tokens.includes(d.symbolToken));
+
+        console.log("Filtered Indices:", JSON.stringify(indices, null, 2));
+        console.log("Filtered Top Stocks Data:", JSON.stringify(topStocksData, null, 2));
+
 
         const topPerformers = topStocksData.map(stock => {
             const price = stock.ltp; 
@@ -344,10 +360,12 @@ app.get('/api/market-data', requireLogin, async (req, res) => {
             return { name: stock.name, symbol: stock.tradingSymbol, price: price, change, percentChange };
         }).sort((a, b) => b.percentChange - a.percentChange).slice(0, 10);
 
+        console.log("Final Top Performers sent to frontend:", JSON.stringify(topPerformers, null, 2));
+
         res.json({ indices, topPerformers });
 
     } catch (error) {
-        console.error("Error in market-data:", error.response ? error.response.data : error.message);
+        console.error("Error in market-data endpoint:", error.response ? error.response.data : error.message);
         res.status(500).json({ message: 'Failed to fetch market data.', error: error.response ? error.response.data : error.message });
     }
 });
