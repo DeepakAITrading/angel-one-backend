@@ -15,6 +15,9 @@ const ANGEL_CLIENT_ID = process.env.ANGEL_CLIENT_ID;
 const ANGEL_PASSWORD = process.env.ANGEL_PASSWORD;
 const ANGEL_TOTP_SECRET = process.env.ANGEL_TOTP_SECRET;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY; // This is the key for Google AI API
+// NEW: Optional Historical Data API Key
+const ANGEL_HISTORICAL_API_KEY = process.env.ANGEL_HISTORICAL_API_KEY; 
+
 
 // --- In-memory storage for session tokens ---
 let session = {
@@ -38,6 +41,26 @@ const requireLogin = (req, res, next) => {
 // --- Helper function to get historical data ---
 const getHistoricalData = async (params) => {
     const { symboltoken, exchange, timeframe, fromdate, todate } = params;
+    
+    // Prepare headers for the historical data call
+    const headers = {
+        'Authorization': `Bearer ${session.jwtToken}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'X-UserType': 'USER',
+        'X-SourceID': 'WEB'
+    };
+
+    // NEW: Conditionally add X-PrivateKey if ANGEL_HISTORICAL_API_KEY is provided
+    // Note: X-PrivateKey is primarily for login. Adding it here is to fulfill the request,
+    // but the primary authentication for this endpoint is the JWT token.
+    if (ANGEL_HISTORICAL_API_KEY) {
+        headers['X-PrivateKey'] = ANGEL_HISTORICAL_API_KEY;
+        console.log("Using ANGEL_HISTORICAL_API_KEY for historical data call.");
+    } else {
+        console.log("ANGEL_HISTORICAL_API_KEY not set, using JWT token for historical data call.");
+    }
+
     try {
         const response = await axios.post('https://apiconnect.angelbroking.com/rest/secure/angelbroking/historical/v1/getCandleData', {
             exchange,
@@ -45,15 +68,7 @@ const getHistoricalData = async (params) => {
             interval: timeframe,
             fromdate,
             todate
-        }, {
-            headers: {
-                'Authorization': `Bearer ${session.jwtToken}`,
-                'Content-Type': 'application/json',
-                'Accept': 'application/json',
-                'X-UserType': 'USER',
-                'X-SourceID': 'WEB'
-            }
-        });
+        }, { headers }); // Use the prepared headers
         return response.data.data;
     } catch (error) {
         console.error(`Error fetching historical data for ${symboltoken} from Angel One:`, error.response ? error.response.data : error.message);
@@ -84,7 +99,7 @@ app.post('/api/login', async (req, res) => {
             headers: {
                 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-UserType': 'USER',
                 'X-SourceID': 'WEB', 'X-ClientLocalIP': '192.168.1.1', 'X-ClientPublicIP': '103.1.1.1',
-                'X-MACAddress': '00:00:00:00:00:00', 'X-PrivateKey': ANGEL_API_KEY
+                'X-MACAddress': '00:00:00:00:00:00', 'X-PrivateKey': ANGEL_API_KEY // X-PrivateKey used here for login
             }
         });
 
@@ -375,7 +390,7 @@ app.get('/api/market-data', requireLogin, async (req, res) => {
     }
 });
 
-// NEW: Endpoint to generate news summary using Google AI API
+// Endpoint to generate news summary using Google AI API
 app.post('/api/generate-news-summary', requireLogin, async (req, res) => {
     const { companyName } = req.body;
 
