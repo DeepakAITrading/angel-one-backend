@@ -64,8 +64,21 @@ const getHistoricalData = async (params) => {
 
 // --- API Endpoints ---
 
-app.get('/', (req, res) => {
-  res.send('Angel One Authenticated Backend is running!');
+app.get('/api/status', async (req, res) => {
+    let aiStatus = 'Offline';
+    try {
+        if (GEMINI_API_KEY) {
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash?key=${GEMINI_API_KEY}`;
+            await axios.get(apiUrl);
+            aiStatus = 'Live';
+        }
+    } catch (error) {
+        console.error("AI API status check failed:", error.message);
+    }
+    res.json({
+        server: 'Live',
+        aiApi: aiStatus
+    });
 });
 
 app.post('/api/login', async (req, res) => {
@@ -176,45 +189,60 @@ app.post('/api/stock-analysis', requireLogin, async (req, res) => {
 
 app.get('/api/market-data', requireLogin, async (req, res) => {
     try {
-        const indexTokens = ["26000", "26009", "26037"];
-        const sensexToken = ["99926000"];
+        const indexTokens = ["26000", "26009"]; // NIFTY 50, BANKNIFTY
+        const sensexToken = ["99926000"]; // SENSEX
         const nifty50Tokens = ["2885", "11536", "1594", "3456", "1333", "5258", "10940", "3045", "1660", "1394"];
 
+        const tokensToFetch = {
+            "NSE": [...indexTokens, ...nifty50Tokens],
+            "BSE": sensexToken
+        };
+
         let quoteData;
+        
         try {
-            const quotePayload = { "mode": "FULL", "exchangeTokens": { "NSE": [...indexTokens, ...nifty50Tokens], "BSE": sensexToken } };
+            // First, try to get live data (FULL mode)
+            const quotePayload = { "mode": "FULL", "exchangeTokens": tokensToFetch };
             const quoteResponse = await axios.post('https://apiconnect.angelbroking.com/rest/secure/angelbroking/market/v1/getQuote', quotePayload, {
                 headers: { 'Authorization': `Bearer ${session.jwtToken}` }
             });
             quoteData = quoteResponse.data.data;
         } catch (liveError) {
-            console.log("Live data fetch failed (market likely closed), fetching OHLC data instead.");
-            const ohlcPayload = { "mode": "OHLC", "exchangeTokens": { "NSE": [...indexTokens, ...nifty50Tokens], "BSE": sensexToken } };
-            const ohlcResponse = await axios.post('https://apiconnect.angelbroking.com/rest/secure/angelbroking/market/v1/getQuote', ohlcPayload, {
-                headers: { 'Authorization': `Bearer ${session.jwtToken}` }
-            });
-            quoteData = ohlcResponse.data.data.map(d => ({
-                ...d,
-                ltp: d.ohlc.close,
-                netChange: 0,
-                percentChange: 0,
-                close: d.ohlc.close
-            }));
+            // If live data fails (e.g., market closed), try to get OHLC data
+            console.log("Live data fetch failed, attempting to fetch OHLC data as fallback.");
+            try {
+                const ohlcPayload = { "mode": "OHLC", "exchangeTokens": tokensToFetch };
+                const ohlcResponse = await axios.post('https://apiconnect.angelbroking.com/rest/secure/angelbroking/market/v1/getQuote', ohlcPayload, {
+                    headers: { 'Authorization': `Bearer ${session.jwtToken}` }
+                });
+                // Standardize the OHLC data to look like the FULL data for the frontend
+                quoteData = ohlcResponse.data.data.map(d => ({
+                    ...d,
+                    ltp: d.ohlc.close,
+                    netChange: 0,
+                    percentChange: 0,
+                    close: d.ohlc.close 
+                }));
+            } catch (ohlcError) {
+                console.error("Both live (FULL) and OHLC data fetches failed. Cannot provide market data.");
+                throw new Error("Could not retrieve market data from Angel One. The market might be closed or the API is unresponsive.");
+            }
         }
         
         const indices = quoteData.filter(d => indexTokens.includes(d.symbolToken) || sensexToken.includes(d.symbolToken));
         const topStocksData = quoteData.filter(d => nifty50Tokens.includes(d.symbolToken));
 
         const topPerformers = topStocksData.map(stock => {
-            const change = stock.ltp - (stock.close || stock.ohlc.close);
-            const percentChange = (stock.close || stock.ohlc.close) !== 0 ? (change / (stock.close || stock.ohlc.close)) * 100 : 0;
+            const closePrice = stock.close || (stock.ohlc ? stock.ohlc.close : 0);
+            const change = stock.ltp - closePrice;
+            const percentChange = closePrice !== 0 ? (change / closePrice) * 100 : 0;
             return { name: stock.name, symbol: stock.tradingSymbol, price: stock.ltp, change, percentChange };
         }).sort((a, b) => b.percentChange - a.percentChange).slice(0, 10);
 
         res.json({ indices, topPerformers });
 
     } catch (error) {
-        res.status(500).json({ message: 'Failed to fetch market data.', error: error.response ? error.response.data : error.message });
+        res.status(500).json({ message: error.message, error: error.toString() });
     }
 });
 
