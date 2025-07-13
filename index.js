@@ -64,21 +64,8 @@ const getHistoricalData = async (params) => {
 
 // --- API Endpoints ---
 
-app.get('/api/status', async (req, res) => {
-    let aiStatus = 'Offline';
-    try {
-        if (GEMINI_API_KEY) {
-            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash?key=${GEMINI_API_KEY}`;
-            await axios.get(apiUrl);
-            aiStatus = 'Live';
-        }
-    } catch (error) {
-        console.error("AI API status check failed:", error.message);
-    }
-    res.json({
-        server: 'Live',
-        aiApi: aiStatus
-    });
+app.get('/', (req, res) => {
+  res.send('Angel One Authenticated Backend is running!');
 });
 
 app.post('/api/login', async (req, res) => {
