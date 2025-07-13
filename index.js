@@ -1,5 +1,4 @@
 // index.js
-
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
@@ -14,7 +13,7 @@ const ANGEL_API_KEY = process.env.ANGEL_API_KEY;
 const ANGEL_CLIENT_ID = process.env.ANGEL_CLIENT_ID;
 const ANGEL_PASSWORD = process.env.ANGEL_PASSWORD;
 const ANGEL_TOTP_SECRET = process.env.ANGEL_TOTP_SECRET;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY; // This is not used in the current code, but kept as per your original
 
 // --- In-memory storage for session tokens ---
 let session = {
@@ -65,7 +64,7 @@ const getHistoricalData = async (params) => {
 // --- API Endpoints ---
 
 app.get('/', (req, res) => {
-  res.send('Angel One Authenticated Backend is running!');
+    res.send('Angel One Authenticated Backend is running!');
 });
 
 app.post('/api/login', async (req, res) => {
@@ -137,6 +136,7 @@ app.post('/api/historical-data', requireLogin, async (req, res) => {
 app.post('/api/stock-analysis', requireLogin, async (req, res) => {
     const { symboltoken, exchange } = req.body;
     try {
+        // Fetch a year's worth of daily historical data for indicator calculation
         const todate = new Date().toISOString().slice(0, 10);
         let fromdate = new Date();
         fromdate.setFullYear(fromdate.getFullYear() - 1);
@@ -151,80 +151,189 @@ app.post('/api/stock-analysis', requireLogin, async (req, res) => {
         }
         const closingPrices = candles.map(c => c[4]);
 
-        // **FIX:** Calculate indicators only if there's enough data, otherwise return null
+        // Calculate indicators only if there's enough data
         const rsi = closingPrices.length >= 14 ? RSI.calculate({ values: closingPrices, period: 14 }) : [];
         const sma20 = closingPrices.length >= 20 ? SMA.calculate({ values: closingPrices, period: 20 }) : [];
         const sma50 = closingPrices.length >= 50 ? SMA.calculate({ values: closingPrices, period: 50 }) : [];
         const sma200 = closingPrices.length >= 200 ? SMA.calculate({ values: closingPrices, period: 200 }) : [];
 
-        const quotePayload = { "mode": "LTP", "exchangeTokens": { [exchange]: [symboltoken] } };
-        const quoteResponse = await axios.post('https://apiconnect.angelbroking.com/rest/secure/angelbroking/market/v1/getQuote', quotePayload, {
-            headers: { 'Authorization': `Bearer ${session.jwtToken}` }
-        });
-        const liveData = quoteResponse.data.data;
+        let currentPrice = null;
+        let netChange = null;
+        let percentChange = null;
+
+        // Try to get live data (LTP) first
+        try {
+            const quotePayload = { "mode": "LTP", "exchangeTokens": { [exchange]: [symboltoken] } };
+            const quoteResponse = await axios.post('https://apiconnect.angelbroking.com/rest/secure/angelbroking/market/v1/getQuote', quotePayload, {
+                headers: { 'Authorization': `Bearer ${session.jwtToken}` }
+            });
+            const liveData = quoteResponse.data.data;
+
+            if (liveData && liveData.ltp) {
+                currentPrice = liveData.ltp;
+                // Fetch previous day's close for accurate change calculation for live data
+                const today = new Date();
+                let previousTradingDay = new Date(today);
+                previousTradingDay.setDate(today.getDate() - 1); // Start checking from yesterday
+
+                let previousTradingDayClose = null;
+
+                // Loop backwards to find the last trading day's close (max 5 days to avoid excessive calls)
+                for (let i = 0; i < 5; i++) {
+                    const prevDayCandles = await getHistoricalData({
+                        exchange, symboltoken, timeframe: 'ONE_DAY',
+                        fromdate: previousTradingDay.toISOString().slice(0, 10),
+                        todate: previousTradingDay.toISOString().slice(0, 10)
+                    });
+                    if (prevDayCandles && prevDayCandles.length > 0) {
+                        previousTradingDayClose = prevDayCandles[0][4]; // Close price of that day
+                        break;
+                    }
+                    previousTradingDay.setDate(previousTradingDay.getDate() - 1); // Go further back
+                }
+
+                if (previousTradingDayClose !== null) {
+                    netChange = currentPrice - previousTradingDayClose;
+                    percentChange = (netChange / previousTradingDayClose) * 100;
+                } else {
+                    // Fallback if previous day's close can't be found (unlikely for active stocks)
+                    netChange = 0;
+                    percentChange = 0;
+                }
+            } else {
+                // If live LTP fails or is empty, fall back to historical close
+                throw new Error("Live LTP data not available.");
+            }
+        } catch (quoteError) {
+            console.log(`Live LTP fetch failed for ${symboltoken}, falling back to last available close price from historical data.`);
+            // Use the last available close price from the fetched historical daily candles
+            if (closingPrices.length > 0) {
+                currentPrice = closingPrices[closingPrices.length - 1]; // Last available close price
+                // To calculate change, use the second to last close price if available
+                if (closingPrices.length > 1) {
+                    const previousClose = closingPrices[closingPrices.length - 2];
+                    netChange = currentPrice - previousClose;
+                    percentChange = (netChange / previousClose) * 100;
+                } else {
+                    // Only one data point, no change to calculate from a previous day
+                    netChange = 0;
+                    percentChange = 0;
+                }
+            }
+        }
 
         res.json({
-            currentPrice: liveData.ltp,
+            currentPrice: currentPrice,
+            netChange: netChange,
+            percentChange: percentChange,
             rsi: rsi.length > 0 ? rsi[rsi.length - 1] : null,
             dma20: sma20.length > 0 ? sma20[sma20.length - 1] : null,
             dma50: sma50.length > 0 ? sma50[sma50.length - 1] : null,
             dma200: sma200.length > 0 ? sma200[sma200.length - 1] : null
         });
     } catch (error) {
+        console.error("Error in stock-analysis:", error.message);
         res.status(500).json({ message: 'Failed to calculate stock analysis.', error: error.message });
     }
 });
 
 app.get('/api/market-data', requireLogin, async (req, res) => {
     try {
-        const indexTokens = ["26000", "26009", "26037"];
-        const sensexToken = ["99926000"];
-        const nifty50Tokens = ["2885", "11536", "1594", "3456", "1333", "5258", "10940", "3045", "1660", "1394"];
+        const indexTokens = ["26000", "26009", "26037"]; // Nifty (26000), Bank Nifty (26009), Sensex (26037)
+        const nifty50Tokens = ["2885", "11536", "1594", "3456", "1333", "5258", "10940", "3045", "1660", "1394"]; // Example Nifty 50 tokens (adjust as needed)
 
         const tokensToFetch = {
-            "NSE": [...indexTokens, ...nifty50Tokens],
-            "BSE": sensexToken
+            "NSE": indexTokens.filter(t => t !== "26037").concat(nifty50Tokens), // Nifty, Bank Nifty, and Nifty 50 stocks
+            "BSE": ["26037"] // Only Sensex for BSE
         };
 
-        let quoteData;
+        let quoteData = [];
+        let isLiveMarketData = true; // Flag to indicate if data is truly live or historical fallback
+
         try {
+            // Attempt to get FULL mode (live) data first
             const quotePayload = { "mode": "FULL", "exchangeTokens": tokensToFetch };
             const quoteResponse = await axios.post('https://apiconnect.angelbroking.com/rest/secure/angelbroking/market/v1/getQuote', quotePayload, {
                 headers: { 'Authorization': `Bearer ${session.jwtToken}` }
             });
-            quoteData = quoteResponse.data.data;
+            
+            // Check if live data is actually returned and not empty
+            if (quoteResponse.data && quoteResponse.data.data && quoteResponse.data.data.length > 0 && quoteResponse.data.data[0].ltp !== undefined) {
+                quoteData = quoteResponse.data.data;
+                console.log("Fetched LIVE market data.");
+            } else {
+                // If live data is empty or LTP is undefined, assume market is closed or no live data
+                throw new Error("No live data received from FULL mode, attempting OHLC fallback.");
+            }
         } catch (liveError) {
-            console.log("Live data fetch failed (market likely closed), fetching OHLC data instead.");
+            console.log("Live data fetch failed (market likely closed or no data), fetching OHLC data instead.", liveError.message);
+            isLiveMarketData = false;
+
+            // Fetch OHLC data for current day (which will be the last trading day's close if market is closed)
             const ohlcPayload = { "mode": "OHLC", "exchangeTokens": tokensToFetch };
             const ohlcResponse = await axios.post('https://apiconnect.angelbroking.com/rest/secure/angelbroking/market/v1/getQuote', ohlcPayload, {
                 headers: { 'Authorization': `Bearer ${session.jwtToken}` }
             });
-            quoteData = ohlcResponse.data.data.map(d => ({
-                ...d,
-                ltp: d.ohlc.close,
-                netChange: 0,
-                percentChange: 0,
-                close: d.ohlc.close 
-            }));
+            let ohlcRawData = ohlcResponse.data.data;
+
+            // Prepare to fetch previous day's close for each instrument
+            const today = new Date();
+            let previousTradingDay = new Date(today);
+            previousTradingDay.setDate(today.getDate() - 1); // Start checking from yesterday
+
+            for (const item of ohlcRawData) {
+                let previousClose = null;
+                // Loop backwards to find the last trading day's close (max 5 days to avoid excessive calls)
+                let tempPrevDay = new Date(previousTradingDay); // Use a temporary date for each item
+                for (let i = 0; i < 5; i++) {
+                    const prevDayCandles = await getHistoricalData({
+                        exchange: item.exchange,
+                        symboltoken: item.symbolToken,
+                        timeframe: 'ONE_DAY',
+                        fromdate: tempPrevDay.toISOString().slice(0, 10),
+                        todate: tempPrevDay.toISOString().slice(0, 10)
+                    });
+                    if (prevDayCandles && prevDayCandles.length > 0) {
+                        previousClose = prevDayCandles[0][4]; // Close price of that day
+                        break;
+                    }
+                    tempPrevDay.setDate(tempPrevDay.getDate() - 1); // Go further back
+                }
+
+                const currentClose = item.ohlc.close;
+                const netChange = previousClose !== null ? currentClose - previousClose : 0;
+                const percentChange = previousClose !== null && previousClose !== 0 ? (netChange / previousClose) * 100 : 0;
+
+                quoteData.push({
+                    ...item,
+                    ltp: currentClose, // Use last close as LTP when market is closed
+                    netChange: netChange,
+                    percentChange: percentChange,
+                    close: currentClose // Ensure close is also set
+                });
+            }
+            console.log("Fetched OHLC fallback market data.");
         }
         
         const indices = quoteData.filter(d => indexTokens.includes(d.symbolToken) || sensexToken.includes(d.symbolToken));
         const topStocksData = quoteData.filter(d => nifty50Tokens.includes(d.symbolToken));
 
         const topPerformers = topStocksData.map(stock => {
-            const closePrice = stock.close || (stock.ohlc ? stock.ohlc.close : 0);
-            const change = stock.ltp - closePrice;
-            const percentChange = closePrice !== 0 ? (change / closePrice) * 100 : 0;
-            return { name: stock.name, symbol: stock.tradingSymbol, price: stock.ltp, change, percentChange };
+            const price = stock.ltp; 
+            const change = stock.netChange; 
+            const percentChange = stock.percentChange; 
+            
+            return { name: stock.name, symbol: stock.tradingSymbol, price: price, change, percentChange };
         }).sort((a, b) => b.percentChange - a.percentChange).slice(0, 10);
 
         res.json({ indices, topPerformers });
 
     } catch (error) {
+        console.error("Error in market-data:", error.response ? error.response.data : error.message);
         res.status(500).json({ message: 'Failed to fetch market data.', error: error.response ? error.response.data : error.message });
     }
 });
 
 app.listen(port, () => {
-  console.log(`Server listening on port ${port}`);
+    console.log(`Server listening on port ${port}`);
 });
