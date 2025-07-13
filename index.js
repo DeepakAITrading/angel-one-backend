@@ -146,16 +146,15 @@ app.post('/api/stock-analysis', requireLogin, async (req, res) => {
             exchange, symboltoken, timeframe: 'ONE_DAY', fromdate, todate
         });
 
-        if (!candles || candles.length === 0) {
-            return res.status(404).json({ message: "No historical data available for this stock." });
+        if (!candles || candles.length < 200) {
+            return res.status(404).json({ message: "Not enough historical data to calculate all indicators." });
         }
         const closingPrices = candles.map(c => c[4]);
 
-        // **FIX:** Calculate indicators only if there's enough data, otherwise return null
-        const rsi = closingPrices.length >= 14 ? RSI.calculate({ values: closingPrices, period: 14 }) : [];
-        const sma20 = closingPrices.length >= 20 ? SMA.calculate({ values: closingPrices, period: 20 }) : [];
-        const sma50 = closingPrices.length >= 50 ? SMA.calculate({ values: closingPrices, period: 50 }) : [];
-        const sma200 = closingPrices.length >= 200 ? SMA.calculate({ values: closingPrices, period: 200 }) : [];
+        const rsi = RSI.calculate({ values: closingPrices, period: 14 });
+        const sma20 = SMA.calculate({ values: closingPrices, period: 20 });
+        const sma50 = SMA.calculate({ values: closingPrices, period: 50 });
+        const sma200 = SMA.calculate({ values: closingPrices, period: 200 });
 
         const quotePayload = { "mode": "LTP", "exchangeTokens": { [exchange]: [symboltoken] } };
         const quoteResponse = await axios.post('https://apiconnect.angelbroking.com/rest/secure/angelbroking/market/v1/getQuote', quotePayload, {
@@ -165,10 +164,10 @@ app.post('/api/stock-analysis', requireLogin, async (req, res) => {
 
         res.json({
             currentPrice: liveData.ltp,
-            rsi: rsi.length > 0 ? rsi[rsi.length - 1] : null,
-            dma20: sma20.length > 0 ? sma20[sma20.length - 1] : null,
-            dma50: sma50.length > 0 ? sma50[sma50.length - 1] : null,
-            dma200: sma200.length > 0 ? sma200[sma200.length - 1] : null
+            rsi: rsi[rsi.length - 1],
+            dma20: sma20[sma20.length - 1],
+            dma50: sma50[sma50.length - 1],
+            dma200: sma200[sma200.length - 1]
         });
     } catch (error) {
         res.status(500).json({ message: 'Failed to calculate stock analysis.', error: error.message });
@@ -181,16 +180,22 @@ app.get('/api/market-data', requireLogin, async (req, res) => {
         const sensexToken = ["99926000"];
         const nifty50Tokens = ["2885", "11536", "1594", "3456", "1333", "5258", "10940", "3045", "1660", "1394"];
 
+        const tokensToFetch = {
+            "NSE": [...indexTokens, ...nifty50Tokens],
+            "BSE": sensexToken
+        };
+
         let quoteData;
+        
         try {
-            const quotePayload = { "mode": "FULL", "exchangeTokens": { "NSE": [...indexTokens, ...nifty50Tokens], "BSE": sensexToken } };
+            const quotePayload = { "mode": "FULL", "exchangeTokens": tokensToFetch };
             const quoteResponse = await axios.post('https://apiconnect.angelbroking.com/rest/secure/angelbroking/market/v1/getQuote', quotePayload, {
                 headers: { 'Authorization': `Bearer ${session.jwtToken}` }
             });
             quoteData = quoteResponse.data.data;
         } catch (liveError) {
             console.log("Live data fetch failed (market likely closed), fetching OHLC data instead.");
-            const ohlcPayload = { "mode": "OHLC", "exchangeTokens": { "NSE": [...indexTokens, ...nifty50Tokens], "BSE": sensexToken } };
+            const ohlcPayload = { "mode": "OHLC", "exchangeTokens": tokensToFetch };
             const ohlcResponse = await axios.post('https://apiconnect.angelbroking.com/rest/secure/angelbroking/market/v1/getQuote', ohlcPayload, {
                 headers: { 'Authorization': `Bearer ${session.jwtToken}` }
             });
