@@ -26,6 +26,9 @@ let session = {
     profile: null
 };
 
+// Global variable to store instrument master data
+let instrumentMaster = [];
+
 app.use(cors());
 app.use(express.json());
 
@@ -74,6 +77,23 @@ const getHistoricalData = async (params) => {
         throw new Error(`Failed to fetch historical data for ${symboltoken} from Angel One.`);
     }
 };
+
+// --- Function to fetch and store instrument master data ---
+const fetchInstrumentMaster = async () => {
+    try {
+        const instrumentListUrl = 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json';
+        const response = await axios.get(instrumentListUrl);
+        instrumentMaster = response.data; // Store the full instrument list
+        console.log("Instrument master data loaded successfully.");
+    } catch (error) {
+        console.error("Error fetching instrument master data:", error.message);
+        // This is a critical error, as other parts depend on it.
+        // Consider exiting or retrying based on application requirements.
+    }
+};
+
+// Call this function once when the server starts
+fetchInstrumentMaster();
 
 
 // --- API Endpoints ---
@@ -127,9 +147,11 @@ app.post('/api/login', async (req, res) => {
 
 app.get('/api/instruments', requireLogin, async (req, res) => {
     try {
-        const instrumentListUrl = 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json';
-        const response = await axios.get(instrumentListUrl);
-        const nseStocks = response.data.filter(instrument => 
+        // Return the already loaded instrument master data
+        if (instrumentMaster.length === 0) {
+            await fetchInstrumentMaster(); // Re-fetch if somehow empty (shouldn't happen often)
+        }
+        const nseStocks = instrumentMaster.filter(instrument => 
             instrument.exch_seg === 'NSE' && 
             instrument.symbol.endsWith('-EQ')
         );
@@ -299,8 +321,6 @@ app.get('/api/market-data', requireLogin, async (req, res) => {
             
             const today = new Date();
             let lastTradingDay = new Date(today);
-            lastTradingDay.setDate(today.getDate() - 1); // Start checking from yesterday
-
             // Find the actual last trading day by checking for historical data
             let actualLastTradingDate = null;
             for (let i = 0; i < 7; i++) { // Check up to last 7 days to find a trading day
@@ -308,11 +328,10 @@ app.get('/api/market-data', requireLogin, async (req, res) => {
                 testDate.setDate(today.getDate() - i);
                 const testDateString = testDate.toISOString().slice(0, 10);
 
-                // Try fetching historical data for a known index (e.g., Nifty 50) for this date
                 try {
                     const testCandles = await getHistoricalData({
                         exchange: 'NSE',
-                        symboltoken: '26000', // Nifty 50 token
+                        symboltoken: '26000', // Nifty 50 token for testing
                         timeframe: 'ONE_DAY',
                         fromdate: testDateString,
                         todate: testDateString
@@ -328,7 +347,7 @@ app.get('/api/market-data', requireLogin, async (req, res) => {
 
             if (!actualLastTradingDate) {
                 console.warn("Could not determine a recent actual last trading date for historical data fallback.");
-                res.json({ indices: [], topPerformers: [] }); // Send empty data if no trading day found
+                res.json({ indices: [], topPerformers: [] }); 
                 return;
             }
             console.log("Determined last actual trading date:", actualLastTradingDate);
@@ -345,14 +364,13 @@ app.get('/api/market-data', requireLogin, async (req, res) => {
                     });
 
                     if (lastDayCandles && lastDayCandles.length > 0) {
-                        const currentClose = lastDayCandles[0][4]; // Close price of last trading day
+                        const currentClose = lastDayCandles[0][4]; 
 
-                        // Fetch the day before the last trading day for change calculation
                         let prevDayForChange = new Date(actualLastTradingDate);
                         prevDayForChange.setDate(prevDayForChange.getDate() - 1);
                         let previousClose = null;
 
-                        for (let i = 0; i < 5; i++) { // Look back up to 5 days for previous trading day
+                        for (let i = 0; i < 5; i++) { 
                             const prevCandles = await getHistoricalData({
                                 exchange: tokenInfo.exchange,
                                 symboltoken: tokenInfo.symboltoken,
@@ -370,19 +388,16 @@ app.get('/api/market-data', requireLogin, async (req, res) => {
                         const netChange = previousClose !== null ? currentClose - previousClose : 0;
                         const percentChange = (previousClose !== null && previousClose !== 0) ? (netChange / previousClose) * 100 : 0;
 
-                        // Find the instrument details from the scrip master (assuming it was loaded earlier)
-                        // This part needs to be robust. We don't have allStocks here.
-                        // For now, we'll use a placeholder or assume the frontend maps tokens to names.
-                        // Ideally, instrument list should be cached or fetched once.
-                        // For this context, we'll use a placeholder for name/tradingSymbol
-                        const instrumentName = `Token ${tokenInfo.symboltoken}`; // Placeholder
-                        const tradingSymbol = `SYM${tokenInfo.symboltoken}`; // Placeholder
+                        // Find actual instrument details from instrumentMaster
+                        const instrumentDetail = instrumentMaster.find(inst => 
+                            inst.exchange === tokenInfo.exchange && inst.symboltoken === tokenInfo.symboltoken
+                        );
 
                         quoteData.push({
                             exchange: tokenInfo.exchange,
                             symbolToken: tokenInfo.symboltoken,
-                            name: instrumentName, // Placeholder
-                            tradingSymbol: tradingSymbol, // Placeholder
+                            name: instrumentDetail ? instrumentDetail.name : `Unknown Name (${tokenInfo.symboltoken})`,
+                            tradingSymbol: instrumentDetail ? instrumentDetail.tradingsymbol : `UNKNOWN${tokenInfo.symboltoken}`,
                             ltp: currentClose,
                             netChange: netChange,
                             percentChange: percentChange,
@@ -398,7 +413,6 @@ app.get('/api/market-data', requireLogin, async (req, res) => {
         
         console.log("Final quoteData before filtering:", JSON.stringify(quoteData, null, 2));
 
-        // Filter and process indices and top performers based on the collected quoteData
         const indices = quoteData.filter(d => indexTokensNSE.includes(d.symbolToken) || indexTokensBSE.includes(d.symbolToken));
         const topStocksData = quoteData.filter(d => nifty50Tokens.includes(d.symbolToken));
 
